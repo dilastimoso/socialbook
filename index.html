@@ -32,7 +32,6 @@
             flex-direction: column;
         }
 
-        /* --- Header --- */
         header {
             height: 70px;
             display: flex;
@@ -56,7 +55,6 @@
             letter-spacing: 2px;
         }
 
-        /* --- Layout --- */
         .container {
             display: flex;
             flex: 1;
@@ -83,7 +81,6 @@
             gap: 30px;
         }
 
-        /* --- UI Components --- */
         .glass-panel {
             background: var(--glass);
             backdrop-filter: blur(12px);
@@ -112,7 +109,6 @@
             box-shadow: 0 0 15px var(--neon-blue);
         }
 
-        /* --- Input Area --- */
         .create-post {
             width: 100%;
             max-width: 600px;
@@ -134,11 +130,8 @@
             outline: none;
         }
 
-        textarea:focus {
-            border-color: var(--neon-pink);
-        }
+        textarea:focus { border-color: var(--neon-pink); }
 
-        /* --- Feed --- */
         .feed {
             width: 100%;
             max-width: 600px;
@@ -146,10 +139,6 @@
             flex-direction: column;
             gap: 20px;
             padding-bottom: 50px;
-        }
-
-        .post {
-            animation: fadeIn 0.5s ease-out;
         }
 
         .post-header {
@@ -166,17 +155,9 @@
             background: linear-gradient(45deg, var(--neon-blue), var(--neon-pink));
         }
 
-        .username {
-            font-weight: bold;
-            color: var(--neon-blue);
-        }
+        .username { font-weight: bold; color: var(--neon-blue); }
+        .timestamp { font-size: 0.8rem; color: #888; }
 
-        .timestamp {
-            font-size: 0.8rem;
-            color: #888;
-        }
-
-        /* --- Token Modal --- */
         #auth-modal {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -187,22 +168,18 @@
             z-index: 1000;
         }
 
-        .modal-content {
-            width: 400px;
-            text-align: center;
-        }
+        .modal-content { width: 400px; text-align: center; }
 
         .input-token {
             width: 100%;
             padding: 10px;
-            margin: 20px 0;
+            margin: 10px 0;
             background: rgba(255,255,255,0.1);
             border: 1px solid var(--neon-blue);
             color: white;
             border-radius: 5px;
         }
 
-        /* --- Video Modal --- */
         #video-modal {
             display: none;
             position: fixed;
@@ -214,13 +191,7 @@
             justify-content: center;
         }
 
-        .video-container {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
+        .video-container { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
 
         video {
             width: 400px;
@@ -238,10 +209,6 @@
             animation: pulse 2s infinite;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
         @keyframes pulse {
             0% { opacity: 0.5; }
             50% { opacity: 1; }
@@ -253,17 +220,18 @@
 
     <div id="auth-modal">
         <div class="glass-panel modal-content">
-            <h2 style="color: var(--neon-blue); margin-bottom: 10px;">SECURE UPLINK</h2>
-            <p>Enter credentials to access the encrypted vault.</p>
+            <h2 style="color: var(--neon-blue); margin-bottom: 10px;">IDENTITY VERIFICATION</h2>
+            <p id="auth-msg">Login or Create a new Identity.</p>
             
-            <input type="hidden" id="dropbox-token">
-            <div style="color: var(--neon-blue); font-size: 0.8rem; margin-bottom: 15px;">
-                SYSTEM TOKEN: HARDCODED [ACTIVE]
+            <input type="text" id="auth-username" class="input-token" placeholder="Username (Identity)" autocomplete="off">
+            <input type="password" id="auth-password" class="input-token" placeholder="Password (Key)">
+            
+            <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px;">
+                <button class="btn-neon" onclick="handleLogin()">LOGIN</button>
+                <button class="btn-neon" style="border-color: var(--neon-pink); color: var(--neon-pink);" onclick="handleRegister()">REGISTER</button>
             </div>
             
-            <input type="password" id="network-key" class="input-token" placeholder="Network Encryption Key (Password)">
-            
-            <button class="btn-neon" onclick="initApp()">Initialize Secure Connection</button>
+            <div id="login-loading" style="display:none; color: #888; margin-top: 10px; font-size: 0.8rem;">ACCESSING USER DATABASE...</div>
         </div>
     </div>
 
@@ -282,7 +250,7 @@
 
     <header>
         <div class="logo">SOCIALBOOK</div>
-        <div class="user-status" style="color: var(--neon-pink);">● ONLINE</div>
+        <div class="user-status" style="color: var(--neon-pink);">● OFFLINE</div>
     </header>
 
     <div class="container">
@@ -294,3 +262,22 @@
                     <li onclick="openVideoModal()" style="color: var(--neon-blue);">> Start Video Uplink</li>
                     <li>> Data Vault</li>
                 </ul>
+            </div>
+        </aside>
+
+        <main>
+            <div class="glass-panel create-post">
+                <textarea id="post-input" rows="3" placeholder="What is on your mind?"></textarea>
+                <div style="display: flex; justify-content: flex-end;">
+                    <button class="btn-neon" onclick="createPost()">Transmit Data</button>
+                </div>
+            </div>
+            <div id="feed-stream" class="feed">
+                <div style="text-align: center; color: #666; margin-top: 50px;">Waiting for identity verification...</div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
