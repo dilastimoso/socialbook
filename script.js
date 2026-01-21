@@ -11,126 +11,237 @@ document.addEventListener('DOMContentLoaded', () => {
     dbx = new Dropbox.Dropbox({ accessToken: ACCESS_TOKEN });
 });
 
-function encryptData(dataObject) {
-    const jsonString = JSON.stringify(dataObject);
-    return CryptoJS.AES.encrypt(jsonString, GLOBAL_NET_KEY).toString();
+/* --- UTILS --- */
+function encryptData(data) { return CryptoJS.AES.encrypt(JSON.stringify(data), GLOBAL_NET_KEY).toString(); }
+function decryptData(cipher) { try { return JSON.parse(CryptoJS.AES.decrypt(cipher, GLOBAL_NET_KEY).toString(CryptoJS.enc.Utf8)); } catch(e){return null;} }
+function hashPassword(p) { return CryptoJS.SHA256(p).toString(); }
+function aiSafetyScan(t) { return !(/hate|kill|stupid|scam|violence/i.test(t)); }
+
+/* --- UI SWITCHING --- */
+function switchView(viewName, el) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    if(el) el.classList.add('active');
+    
+    document.getElementById('view-feed').style.display = 'none';
+    document.getElementById('view-messages').style.display = 'none';
+    
+    document.getElementById(`view-${viewName}`).style.display = viewName === 'feed' ? 'flex' : 'block';
+    if(viewName === 'messages') loadMessages();
 }
 
-function decryptData(ciphertext) {
-    try {
-        const bytes = CryptoJS.AES.decrypt(ciphertext, GLOBAL_NET_KEY);
-        const originalText = bytes.toString(CryptoJS.enc.Utf8);
-        return JSON.parse(originalText);
-    } catch (e) { return null; }
-}
+/* --- IMAGE HELPER (Base64) --- */
+const toBase64 = file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+});
 
-function hashPassword(password) {
-    return CryptoJS.SHA256(password).toString();
-}
-
-function aiSafetyScan(text) {
-    const violations = [/hate/i, /kill/i, /stupid/i, /scam/i, /violence/i, /attack/i, /abuse/i, /bomb/i, /die/i];
-    for (let pattern of violations) { if (pattern.test(text)) return false; }
-    return true;
-}
-
+/* --- AUTH --- */
 async function getUsersDB() {
     try {
-        const fileData = await dbx.filesDownload({ path: '/socialbook_system/users.json' });
-        const text = await fileData.result.fileBlob.text();
-        return JSON.parse(text);
-    } catch (e) { return {}; }
+        const file = await dbx.filesDownload({ path: '/socialbook_system/users.json' });
+        return JSON.parse(await file.result.fileBlob.text());
+    } catch(e) { return {}; }
 }
 
 async function handleRegister() {
-    const user = document.getElementById('auth-username').value.trim();
-    const pass = document.getElementById('auth-password').value;
-    const loading = document.getElementById('login-loading');
-    if (!user || !pass) { alert("Credentials required."); return; }
-    loading.style.display = 'block';
-    try {
-        const db = await getUsersDB();
-        if (db[user]) { alert("Identity already exists."); loading.style.display = 'none'; return; }
-        db[user] = hashPassword(pass);
-        await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
-        alert("Identity Created.");
-    } catch (e) { alert("Registration Error."); }
-    loading.style.display = 'none';
+    const u = document.getElementById('auth-username').value.trim();
+    const p = document.getElementById('auth-password').value;
+    if(!u || !p) return alert("Fill all fields");
+    
+    const db = await getUsersDB();
+    if(db[u]) return alert("Taken");
+    db[u] = hashPassword(p);
+    
+    await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
+    alert("Created!");
 }
 
 async function handleLogin() {
-    const user = document.getElementById('auth-username').value.trim();
-    const pass = document.getElementById('auth-password').value;
+    const u = document.getElementById('auth-username').value.trim();
+    const p = document.getElementById('auth-password').value;
     const loading = document.getElementById('login-loading');
-    if (!user || !pass) return;
+    
     loading.style.display = 'block';
-    try {
-        const db = await getUsersDB();
-        if (db[user] === hashPassword(pass)) {
-            currentUser = user;
-            document.getElementById('auth-modal').style.display = 'none';
-            document.querySelector('.user-status').innerHTML = `● ONLINE: ${user}`;
-            loadFeed();
-        } else { alert("Verification Failed."); }
-    } catch (e) { alert("Database error."); }
+    const db = await getUsersDB();
+    if(db[u] === hashPassword(p)) {
+        currentUser = u;
+        document.getElementById('auth-modal').style.display = 'none';
+        document.querySelector('.user-status').innerText = u;
+        loadFeed();
+        // Start polling loop
+        setInterval(loadMessages, 3000); 
+    } else {
+        alert("Invalid");
+    }
     loading.style.display = 'none';
 }
 
+/* --- FEED POSTS --- */
 async function createPost() {
-    if (!currentUser) return;
-    const input = document.getElementById('post-input');
-    if (!aiSafetyScan(input.value)) { alert("AI: Content Violation."); return; }
-    const postData = { author: currentUser, content: input.value, date: new Date().toLocaleString() };
-    try {
-        await dbx.filesUpload({ path: `/socialbook_posts/${Date.now()}.json`, contents: encryptData(postData) });
-        input.value = '';
-        loadFeed();
-    } catch (error) { console.error("Upload Error."); }
+    if(!currentUser) return;
+    const txt = document.getElementById('post-input').value;
+    const fileInput = document.getElementById('post-image');
+    
+    if(!txt && !fileInput.files[0]) return;
+    if(!aiSafetyScan(txt)) return alert("Content Violation");
+
+    let imgData = null;
+    if(fileInput.files[0]) {
+        imgData = await toBase64(fileInput.files[0]);
+    }
+
+    const data = { author: currentUser, content: txt, image: imgData, date: new Date().toLocaleString() };
+    await dbx.filesUpload({ path: `/socialbook_posts/${Date.now()}.json`, contents: encryptData(data) });
+    
+    document.getElementById('post-input').value = '';
+    fileInput.value = '';
+    loadFeed();
 }
 
 async function loadFeed() {
-    const feedContainer = document.getElementById('feed-stream');
+    const container = document.getElementById('feed-stream');
     try {
-        const response = await dbx.filesListFolder({ path: '/socialbook_posts' });
-        const files = response.result.entries.sort((a, b) => b.name.localeCompare(a.name));
-        feedContainer.innerHTML = '';
-        for (const file of files) {
-            if (!file.name.endsWith('.json')) continue;
-            const fileData = await dbx.filesDownload({ path: file.path_lower });
-            const text = await fileData.result.fileBlob.text();
-            const post = decryptData(text);
-            if (post) {
-                const div = document.createElement('div');
-                div.className = 'glass-panel post';
-                div.style.marginBottom = '20px';
-                div.innerHTML = `<div class="post-header"><div class="avatar"></div><div><div class="username">${post.author}</div><div class="timestamp">${post.date}</div></div></div><div>${post.content}</div>`;
-                feedContainer.appendChild(div);
-            }
+        const list = await dbx.filesListFolder({ path: '/socialbook_posts' });
+        const files = list.result.entries.sort((a,b) => b.name.localeCompare(a.name));
+        container.innerHTML = '';
+        
+        for(const f of files) {
+            if(!f.name.endsWith('.json')) continue;
+            const down = await dbx.filesDownload({ path: f.path_lower });
+            const post = decryptData(await down.result.fileBlob.text());
+            if(post) renderPost(post, container);
         }
-    } catch (error) { console.error("Sync Error."); }
+    } catch(e) {}
 }
 
+function renderPost(post, container) {
+    const div = document.createElement('div');
+    div.className = 'glass-panel';
+    div.innerHTML = `
+        <div class="post-header">
+            <div class="avatar">${post.author[0].toUpperCase()}</div>
+            <div>
+                <div class="username">${post.author}</div>
+                <div class="timestamp">${post.date}</div>
+            </div>
+        </div>
+        <div>${post.content}</div>
+        ${post.image ? `<img src="${post.image}" class="post-img">` : ''}
+        <div style="margin-top:15px; display:flex; gap:15px; color:#555; border-top:1px solid #eee; padding-top:10px;">
+            <span><i class="far fa-thumbs-up"></i> Like</span>
+            <span><i class="far fa-comment"></i> Comment</span>
+        </div>
+    `;
+    container.appendChild(div);
+}
+
+/* --- MESSENGER --- */
+async function sendMessage() {
+    if(!currentUser) return;
+    const txt = document.getElementById('msg-input').value;
+    const fileInput = document.getElementById('msg-image');
+    
+    if(!txt && !fileInput.files[0]) return;
+
+    let imgData = null;
+    if(fileInput.files[0]) imgData = await toBase64(fileInput.files[0]);
+
+    const data = { author: currentUser, text: txt, image: imgData };
+    await dbx.filesUpload({ path: `/socialbook_messages/${Date.now()}.json`, contents: encryptData(data) });
+    
+    document.getElementById('msg-input').value = '';
+    fileInput.value = '';
+    loadMessages();
+}
+
+async function loadMessages() {
+    // Only load if visible
+    if(document.getElementById('view-messages').style.display === 'none') return;
+    
+    const container = document.getElementById('chat-window');
+    try {
+        // Create folder if not exists
+        try { await dbx.filesCreateFolderV2({ path: '/socialbook_messages' }); } catch(e){}
+
+        const list = await dbx.filesListFolder({ path: '/socialbook_messages' });
+        const files = list.result.entries.sort((a,b) => a.name.localeCompare(b.name)); // Oldest first
+        
+        // Simple diff check to avoid flickering could be done here, but full redraw is safer for patch
+        container.innerHTML = '';
+
+        for(const f of files) {
+            const down = await dbx.filesDownload({ path: f.path_lower });
+            const msg = decryptData(await down.result.fileBlob.text());
+            if(msg) {
+                const isMine = msg.author === currentUser;
+                const div = document.createElement('div');
+                div.className = `msg-bubble ${isMine ? 'msg-mine' : 'msg-theirs'}`;
+                div.innerHTML = `
+                    <div style="font-size:0.7rem; opacity:0.7; margin-bottom:2px;">${msg.author}</div>
+                    ${msg.text}
+                    ${msg.image ? `<br><img src="${msg.image}" style="max-width:200px; border-radius:10px; margin-top:5px;">` : ''}
+                `;
+                container.appendChild(div);
+            }
+        }
+        // Scroll to bottom
+        container.scrollTop = container.scrollHeight;
+    } catch(e){}
+}
+
+/* --- VIDEO CALL (FACETIME STYLE) --- */
 function openVideoModal() { document.getElementById('video-modal').style.display = 'flex'; initLocalVideo(); }
-function closeVideo() { document.getElementById('video-modal').style.display = 'none'; if(localStream) localStream.getTracks().forEach(t => t.stop()); }
-async function initLocalVideo() { localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }); document.getElementById('localVideo').srcObject = localStream; }
+function closeVideo() { document.getElementById('video-modal').style.display = 'none'; if(localStream) localStream.getTracks().forEach(t=>t.stop()); }
+
+async function initLocalVideo() {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById('localVideo').srcObject = localStream;
+}
+
 async function startHost() {
+    document.getElementById('video-status').innerText = "Calling...";
     peerConnection = new RTCPeerConnection(config);
     localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
+    
     peerConnection.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
+    
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     await new Promise(r => setTimeout(r, 1000));
+    
     await dbx.filesUpload({ path: '/socialbook_calls/offer.json', contents: encryptData(peerConnection.localDescription), mode: 'overwrite' });
-    document.getElementById('video-status').innerText = "WAITING FOR PEER...";
+    document.getElementById('video-status').innerText = "Ringing...";
+    
+    // Poll for answer
+    const checkLoop = setInterval(async () => {
+        try {
+            const f = await dbx.filesDownload({ path: '/socialbook_calls/answer.json' });
+            const ans = decryptData(await f.result.fileBlob.text());
+            if(ans) {
+                await peerConnection.setRemoteDescription(ans);
+                document.getElementById('video-status').innerText = "Connected";
+                clearInterval(checkLoop);
+            }
+        } catch(e){}
+    }, 2000);
 }
+
 async function startJoin() {
+    document.getElementById('video-status').innerText = "Connecting...";
     peerConnection = new RTCPeerConnection(config);
     localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
+    
     peerConnection.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
-    const fileData = await dbx.filesDownload({ path: '/socialbook_calls/offer.json' });
-    const offer = decryptData(await fileData.result.fileBlob.text());
+    
+    const f = await dbx.filesDownload({ path: '/socialbook_calls/offer.json' });
+    const offer = decryptData(await f.result.fileBlob.text());
+    
     await peerConnection.setRemoteDescription(offer);
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
+    const ans = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(ans);
+    
     await dbx.filesUpload({ path: '/socialbook_calls/answer.json', contents: encryptData(peerConnection.localDescription), mode: 'overwrite' });
+    document.getElementById('video-status').innerText = "Connected";
 }
