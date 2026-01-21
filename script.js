@@ -86,8 +86,6 @@ function switchView(viewName, el) {
     if(viewName === 'feed') loadFeed();
     if(viewName === 'messages') renderFriendList();
     if(viewName === 'notifications') loadNotifications();
-    
-    // Hide Dropdown if open
     document.getElementById('user-dropdown').style.display = 'none';
 }
 
@@ -107,12 +105,10 @@ auth.onAuthStateChanged(user => {
 });
 
 async function updateHeaderUser() {
-    // Load profile pic for header
     const snap = await db.ref(`users/${currentUser}/profilePic`).once('value');
     const pic = snap.val();
     const avatarEl = document.getElementById('header-avatar');
     document.getElementById('header-username').innerText = currentUser;
-    
     if(pic) {
         avatarEl.style.backgroundImage = `url(${pic})`;
         avatarEl.innerText = '';
@@ -235,7 +231,7 @@ function renderPost(p, container) {
         });
         mediaHtml += '</div>';
     }
-    // Comments HTML
+    // Comments
     const commentsHtml = (p.comments || []).map(c => `<div class="comment"><b>${c.author}:</b> ${c.text}</div>`).join('');
 
     div.innerHTML = `
@@ -292,7 +288,7 @@ function addComment(key, btn) {
     });
 }
 
-/* --- CHAT WITH FIXED DELETE --- */
+/* --- CHAT WITH FLEX LAYOUT FIX --- */
 function createGroupChat() {
     showCustomPrompt("Group Name:", name => {
         const gid = 'group_' + Date.now();
@@ -330,7 +326,7 @@ function selectChat(id, name, isGroup) {
         if(!m) return;
         const isMe = m.author === currentUser;
         
-        // Use Flex Row to position bubbles
+        // Use Flex Row for reliability
         const row = document.createElement('div');
         row.className = `msg-row ${isMe ? 'mine' : 'theirs'}`;
         row.id = `msg-row-${s.key}`;
@@ -340,18 +336,14 @@ function selectChat(id, name, isGroup) {
         bubble.innerHTML = `${isGroup && !isMe ? `<div style="font-size:0.7rem;opacity:0.7;">${m.author}</div>` : ''}
             ${m.text} ${m.image ? `<br><img src="${m.image}" style="max-width:200px;border-radius:10px;margin-top:5px;">` : ''}`;
         
-        // Delete button next to bubble
-        const delBtn = isMe ? document.createElement('i') : null;
-        if(delBtn) {
+        if(isMe) {
+            const delBtn = document.createElement('i');
             delBtn.className = "fas fa-trash";
             delBtn.style.cssText = "color:#ef4444; cursor:pointer; font-size:0.8rem; opacity:0.7; padding: 5px;";
             delBtn.onclick = () => deleteMessage(s.key);
-            // Append order: Delete Btn then Bubble for "Mine" (Flex-end reverses visually if we want, but explicit order is safer)
             row.appendChild(delBtn);
-            row.appendChild(bubble);
-        } else {
-            row.appendChild(bubble);
         }
+        row.appendChild(bubble);
 
         document.getElementById('chat-window').appendChild(row);
     });
@@ -380,7 +372,6 @@ async function openTimeline(username) {
     switchView('timeline');
     document.getElementById('profile-username').innerText = username;
     
-    // Fetch user data
     const snap = await db.ref('users/' + username).once('value');
     const uData = snap.val() || {};
     
@@ -390,11 +381,9 @@ async function openTimeline(username) {
     const avatarBtn = document.getElementById('avatar-upload-btn');
     const coverBtn = document.getElementById('cover-upload-btn');
     
-    // Setup Cover
     if(uData.coverPic) coverEl.style.backgroundImage = `url(${uData.coverPic})`;
     else coverEl.style.backgroundImage = 'none';
 
-    // Setup Avatar
     if(uData.profilePic) {
         avatarEl.style.backgroundImage = `url(${uData.profilePic})`;
         initialEl.style.display = 'none';
@@ -404,7 +393,6 @@ async function openTimeline(username) {
         initialEl.innerText = username[0].toUpperCase();
     }
 
-    // Show upload buttons only if my profile
     if(username === currentUser) {
         avatarBtn.style.display = 'flex';
         coverBtn.style.display = 'flex';
@@ -413,11 +401,9 @@ async function openTimeline(username) {
         coverBtn.style.display = 'none';
     }
     
-    // Hide dropdown
     document.getElementById('user-dropdown').style.display = 'none';
     loadFeed(username);
 }
-
 async function updateProfilePic(input) {
     if(input.files[0]) {
         const b64 = await toBase64(input.files[0]);
@@ -426,7 +412,6 @@ async function updateProfilePic(input) {
         updateHeaderUser();
     }
 }
-
 async function updateCoverPhoto(input) {
     if(input.files[0]) {
         const b64 = await toBase64(input.files[0]);
@@ -435,9 +420,10 @@ async function updateCoverPhoto(input) {
     }
 }
 
-/* --- FIXED WEB-RTC CALLS --- */
+/* --- FIXED WEB-RTC CALLS (CANDIDATE QUEUING) --- */
 let localStream, pc;
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const candidateQueue = []; // Queue for early candidates
 
 function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Select a chat first");
@@ -458,7 +444,6 @@ function listenForCalls() {
         if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
         if(snap.key.includes(currentUser)) {
             showCustomConfirm(`${val.caller} is calling (${val.type}). Answer?`, () => {
-                // Set activeCall explicitly BEFORE accepting
                 activeCall = { id: snap.key, type: val.type, role: 'guest' };
                 db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
                 openVideoModal('answer', val.type);
@@ -469,8 +454,7 @@ function listenForCalls() {
 }
 
 async function startWebRTC(isOfferer) {
-    // Safety check
-    if(!activeCall) return console.error("No active call found");
+    if(!activeCall) return;
     const { id, type } = activeCall;
     
     try {
@@ -491,22 +475,39 @@ async function startWebRTC(isOfferer) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         db.ref(`calls/${id}/offer`).set(JSON.stringify(offer));
+        
         db.ref(`calls/${id}/answer`).on('value', async s => {
-            if(s.val() && !pc.currentRemoteDescription) await pc.setRemoteDescription(JSON.parse(s.val()));
+            if(s.val() && !pc.currentRemoteDescription) {
+                await pc.setRemoteDescription(JSON.parse(s.val()));
+                processCandidateQueue();
+            }
         });
     } else {
         const offerSnap = await db.ref(`calls/${id}/offer`).once('value');
         if(offerSnap.exists()){
             await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
+            processCandidateQueue();
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             db.ref(`calls/${id}/answer`).set(JSON.stringify(answer));
         }
     }
     
+    // Listen for candidates
     db.ref(`calls/${id}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
-        if(pc.remoteDescription) pc.addIceCandidate(JSON.parse(s.val()));
+        const candidate = JSON.parse(s.val());
+        if(pc.remoteDescription) {
+            pc.addIceCandidate(candidate);
+        } else {
+            candidateQueue.push(candidate);
+        }
     });
+}
+
+function processCandidateQueue() {
+    while(candidateQueue.length > 0) {
+        pc.addIceCandidate(candidateQueue.shift());
+    }
 }
 
 function openVideoModal(mode, type) {
@@ -522,4 +523,5 @@ function endCallAction() {
     if(localStream) localStream.getTracks().forEach(t => t.stop());
     if(pc) pc.close();
     activeCall = null;
+    window.location.reload(); // Quick reset to clear call state
 }
