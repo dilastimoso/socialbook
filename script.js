@@ -51,11 +51,11 @@ async function handleRegister() {
     if(!u || !p) return alert("Fill all fields");
     
     const db = await getUsersDB();
-    if(db[u]) return alert("Taken");
+    if(db[u]) return alert("Username Taken");
     db[u] = hashPassword(p);
     
     await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
-    alert("Created!");
+    alert("Account Created!");
 }
 
 async function handleLogin() {
@@ -73,7 +73,7 @@ async function handleLogin() {
         // Start polling loop
         setInterval(loadMessages, 3000); 
     } else {
-        alert("Invalid");
+        alert("Invalid Credentials");
     }
     loading.style.display = 'none';
 }
@@ -85,7 +85,7 @@ async function createPost() {
     const fileInput = document.getElementById('post-image');
     
     if(!txt && !fileInput.files[0]) return;
-    if(!aiSafetyScan(txt)) return alert("Content Violation");
+    if(!aiSafetyScan(txt)) return alert("Safety Violation Detected");
 
     let imgData = null;
     if(fileInput.files[0]) {
@@ -127,11 +127,11 @@ function renderPost(post, container) {
                 <div class="timestamp">${post.date}</div>
             </div>
         </div>
-        <div>${post.content}</div>
+        <div style="line-height: 1.6;">${post.content}</div>
         ${post.image ? `<img src="${post.image}" class="post-img">` : ''}
-        <div style="margin-top:15px; display:flex; gap:15px; color:#555; border-top:1px solid #eee; padding-top:10px;">
-            <span><i class="far fa-thumbs-up"></i> Like</span>
-            <span><i class="far fa-comment"></i> Comment</span>
+        <div style="margin-top:20px; display:flex; gap:20px; color:#64748b; border-top:1px solid rgba(0,0,0,0.05); padding-top:15px;">
+            <span style="cursor:pointer; display:flex; gap:8px; align-items:center;"><i class="far fa-heart"></i> Like</span>
+            <span style="cursor:pointer; display:flex; gap:8px; align-items:center;"><i class="far fa-comment"></i> Comment</span>
         </div>
     `;
     container.appendChild(div);
@@ -157,18 +157,15 @@ async function sendMessage() {
 }
 
 async function loadMessages() {
-    // Only load if visible
     if(document.getElementById('view-messages').style.display === 'none') return;
     
     const container = document.getElementById('chat-window');
     try {
-        // Create folder if not exists
         try { await dbx.filesCreateFolderV2({ path: '/socialbook_messages' }); } catch(e){}
 
         const list = await dbx.filesListFolder({ path: '/socialbook_messages' });
-        const files = list.result.entries.sort((a,b) => a.name.localeCompare(b.name)); // Oldest first
+        const files = list.result.entries.sort((a,b) => a.name.localeCompare(b.name)); 
         
-        // Simple diff check to avoid flickering could be done here, but full redraw is safer for patch
         container.innerHTML = '';
 
         for(const f of files) {
@@ -179,19 +176,18 @@ async function loadMessages() {
                 const div = document.createElement('div');
                 div.className = `msg-bubble ${isMine ? 'msg-mine' : 'msg-theirs'}`;
                 div.innerHTML = `
-                    <div style="font-size:0.7rem; opacity:0.7; margin-bottom:2px;">${msg.author}</div>
+                    <div style="font-size:0.7rem; opacity:0.7; margin-bottom:4px; font-weight:600;">${msg.author}</div>
                     ${msg.text}
-                    ${msg.image ? `<br><img src="${msg.image}" style="max-width:200px; border-radius:10px; margin-top:5px;">` : ''}
+                    ${msg.image ? `<br><img src="${msg.image}" style="max-width:200px; border-radius:12px; margin-top:8px;">` : ''}
                 `;
                 container.appendChild(div);
             }
         }
-        // Scroll to bottom
         container.scrollTop = container.scrollHeight;
     } catch(e){}
 }
 
-/* --- VIDEO CALL (FACETIME STYLE) --- */
+/* --- VIDEO CALL (MODERN OVERLAY) --- */
 function openVideoModal() { document.getElementById('video-modal').style.display = 'flex'; initLocalVideo(); }
 function closeVideo() { document.getElementById('video-modal').style.display = 'none'; if(localStream) localStream.getTracks().forEach(t=>t.stop()); }
 
@@ -201,7 +197,7 @@ async function initLocalVideo() {
 }
 
 async function startHost() {
-    document.getElementById('video-status').innerText = "Calling...";
+    document.getElementById('video-status').innerText = "Initiating Call...";
     peerConnection = new RTCPeerConnection(config);
     localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
     
@@ -212,9 +208,8 @@ async function startHost() {
     await new Promise(r => setTimeout(r, 1000));
     
     await dbx.filesUpload({ path: '/socialbook_calls/offer.json', contents: encryptData(peerConnection.localDescription), mode: 'overwrite' });
-    document.getElementById('video-status').innerText = "Ringing...";
+    document.getElementById('video-status').innerText = "Ringing... Waiting for answer";
     
-    // Poll for answer
     const checkLoop = setInterval(async () => {
         try {
             const f = await dbx.filesDownload({ path: '/socialbook_calls/answer.json' });
