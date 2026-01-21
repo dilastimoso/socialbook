@@ -256,7 +256,10 @@
             <h2 style="color: var(--neon-blue); margin-bottom: 10px;">SECURE UPLINK</h2>
             <p>Enter credentials to access the encrypted vault.</p>
             
-            <input type="password" id="dropbox-token" class="input-token" placeholder="Dropbox Access Token">
+            <input type="hidden" id="dropbox-token">
+            <div style="color: var(--neon-blue); font-size: 0.8rem; margin-bottom: 15px;">
+                SYSTEM TOKEN: HARDCODED [ACTIVE]
+            </div>
             
             <input type="password" id="network-key" class="input-token" placeholder="Network Encryption Key (Password)">
             
@@ -291,23 +294,3 @@
                     <li onclick="openVideoModal()" style="color: var(--neon-blue);">> Start Video Uplink</li>
                     <li>> Data Vault</li>
                 </ul>
-            </div>
-        </aside>
-
-        <main>
-            <div class="glass-panel create-post">
-                <textarea id="post-input" rows="3" placeholder="What is on your mind, User?"></textarea>
-                <div style="display: flex; justify-content: flex-end;">
-                    <button class="btn-neon" onclick="createPost()">Transmit Data</button>
-                </div>
-            </div>
-
-            <div id="feed-stream" class="feed">
-                <div style="text-align: center; color: #666; margin-top: 50px;">Waiting for uplink...</div>
-            </div>
-        </main>
-    </div>
-
-    <script src="script.js"></script>
-</body>
-</html>
