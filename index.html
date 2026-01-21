@@ -73,15 +73,31 @@
             cursor: pointer;
         }
 
-        .user-status {
-            font-size: 0.9rem;
-            color: var(--text-gray);
-            font-weight: 600;
-            background: rgba(0,0,0,0.05);
-            padding: 5px 15px;
-            border-radius: 20px;
-            white-space: nowrap;
+        /* User Dropdown Styles */
+        .user-menu { position: relative; cursor: pointer; }
+        .user-pill {
+            display: flex; align-items: center; gap: 10px;
+            background: rgba(0,0,0,0.05); padding: 5px 15px 5px 5px;
+            border-radius: 30px; transition: 0.2s;
         }
+        .user-pill:hover { background: rgba(0,0,0,0.1); }
+        .user-pill-avatar {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: var(--accent-gradient); color: white;
+            display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.9rem;
+            background-size: cover; background-position: center;
+        }
+        .user-dropdown-content {
+            display: none; position: absolute; top: 50px; right: 0;
+            background: white; width: 180px; border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1); overflow: hidden;
+            animation: slideUp 0.2s ease-out; border: 1px solid rgba(0,0,0,0.05);
+        }
+        .user-dropdown-item {
+            padding: 12px 20px; display: flex; align-items: center; gap: 10px;
+            color: var(--text-dark); font-weight: 500; transition: 0.2s;
+        }
+        .user-dropdown-item:hover { background: #f1f5f9; color: var(--accent-color); }
 
         /* --- Layout --- */
         .container {
@@ -92,7 +108,6 @@
             position: relative;
         }
 
-        /* Desktop Sidebar */
         aside {
             width: 280px;
             padding: 30px;
@@ -114,12 +129,7 @@
             gap: 15px;
             font-size: 1rem;
         }
-
-        .nav-item:hover, .nav-item.active {
-            background: white;
-            color: var(--accent-color);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        }
+        .nav-item:hover, .nav-item.active { background: white; color: var(--accent-color); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
 
         main {
             flex: 1;
@@ -147,16 +157,9 @@
 
         /* Inputs & Buttons */
         .btn-modern {
-            background: var(--accent-gradient);
-            color: white;
-            border: none;
-            padding: 10px 24px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.95rem;
-            cursor: pointer;
-            transition: 0.3s;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+            background: var(--accent-gradient); color: white; border: none;
+            padding: 10px 24px; border-radius: 12px; font-weight: 600; font-size: 0.95rem;
+            cursor: pointer; transition: 0.3s; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
             white-space: nowrap;
         }
         .btn-modern:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(99, 102, 241, 0.4); }
@@ -164,150 +167,113 @@
         .btn-modern.danger { background: #ef4444; color: white; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); }
 
         .btn-icon {
-            width: 40px; height: 40px;
-            border-radius: 50%;
-            border: none;
-            background: rgba(0,0,0,0.05);
-            color: var(--text-dark);
-            cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(0,0,0,0.05); color: var(--text-dark);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
             transition: 0.2s;
         }
         .btn-icon:hover { background: rgba(0,0,0,0.1); }
 
         .input-modern {
-            width: 100%;
-            padding: 14px;
-            background: white;
-            border: 1px solid rgba(0,0,0,0.05);
-            border-radius: 12px;
-            font-size: 1rem;
-            margin-bottom: 12px;
-            color: var(--text-dark);
+            width: 100%; padding: 14px; background: white;
+            border: 1px solid rgba(0,0,0,0.05); border-radius: 12px;
+            font-size: 1rem; margin-bottom: 12px; color: var(--text-dark);
             font-family: 'Inter', sans-serif;
         }
 
         textarea {
-            width: 100%;
-            background: transparent;
-            border: none;
-            padding: 10px;
-            font-family: inherit;
-            font-size: 1.1rem;
-            resize: none;
-            min-height: 80px;
-            color: var(--text-dark);
+            width: 100%; background: transparent; border: none;
+            padding: 10px; font-family: inherit; font-size: 1.1rem;
+            resize: none; min-height: 80px; color: var(--text-dark);
         }
 
         /* Posts */
         .post-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
         .post-user-info { display: flex; align-items: center; gap: 15px; }
         .avatar {
-            width: 45px; height: 45px;
-            border-radius: 14px;
+            width: 45px; height: 45px; border-radius: 14px;
             background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
             display: flex; align-items: center; justify-content: center;
-            color: var(--accent-color);
-            font-weight: 700;
-            font-size: 1.1rem;
-            cursor: pointer;
-            flex-shrink: 0;
+            color: var(--accent-color); font-weight: 700; font-size: 1.1rem;
+            cursor: pointer; flex-shrink: 0; background-size: cover; background-position: center;
         }
         .username { font-weight: 700; font-size: 1rem; cursor: pointer; display: flex; align-items: center; gap: 8px; }
         .timestamp { font-size: 0.8rem; color: var(--text-gray); }
         
-        /* Media Grid for Multiple Photos/Videos */
-        .media-grid {
-            display: grid;
-            gap: 5px;
-            border-radius: 16px;
-            overflow: hidden;
-            margin-top: 15px;
-            border: 1px solid rgba(0,0,0,0.05);
-        }
+        .media-grid { display: grid; gap: 5px; border-radius: 16px; overflow: hidden; margin-top: 15px; border: 1px solid rgba(0,0,0,0.05); }
         .media-grid.single { grid-template-columns: 1fr; }
         .media-grid.multi { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-        
         .post-media { width: 100%; height: 100%; object-fit: cover; max-height: 400px; }
         video.post-media { background: black; }
 
-        .post-actions {
-            margin-top:20px; display:flex; gap:20px; color:#64748b; 
-            border-top:1px solid rgba(0,0,0,0.05); padding-top:15px;
-        }
-        .action-btn { cursor:pointer; display:flex; gap:8px; align-items:center; transition: 0.2s; }
-        .action-btn:hover, .action-btn.liked { color: var(--accent-color); }
+        .post-actions { margin-top:20px; display:flex; gap:20px; color:#64748b; border-top:1px solid rgba(0,0,0,0.05); padding-top:15px; }
         
         /* Messenger */
         #view-messages { display: none; width: 100%; height: 100%; }
         .messenger-container { display: flex; height: 100%; max-width: 900px; margin: 0 auto; gap: 20px; min-height: 0; }
-        
-        .friend-list {
-            width: 250px;
-            background: rgba(255,255,255,0.5);
-            border-radius: 24px;
-            padding: 20px;
-            overflow-y: auto;
-            flex-shrink: 0;
-        }
+        .friend-list { width: 250px; background: rgba(255,255,255,0.5); border-radius: 24px; padding: 20px; overflow-y: auto; flex-shrink: 0; }
         .chat-area { flex: 1; display: flex; flex-direction: column; background: rgba(255,255,255,0.8); border-radius: 24px; padding: 20px; min-width: 0; min-height: 0; }
         .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 15px; flex-shrink: 0; }
         .chat-window { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; min-height: 0; }
 
-        /* BUBBLE FIX: Adapt to size */
         .msg-bubble { 
-            width: fit-content; 
-            max-width: 85%; 
-            padding: 12px 18px; 
-            border-radius: 20px; 
-            font-size: 0.95rem; 
-            line-height: 1.5; 
-            word-wrap: break-word; 
-            word-break: break-word;
-            white-space: pre-wrap;
-            position: relative;
+            width: fit-content; max-width: 85%; padding: 12px 18px; border-radius: 20px; 
+            font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; word-break: break-word;
+            white-space: pre-wrap; position: relative;
         }
         .msg-mine { align-self: flex-end; background: var(--accent-gradient); color: white; border-bottom-right-radius: 4px; }
         .msg-theirs { align-self: flex-start; background: white; color: var(--text-dark); border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
 
+        /* Timeline & Cover Photo */
+        #view-timeline { display: none; width: 100%; flex-direction: column; align-items: center; gap: 20px; }
+        .profile-cover {
+            width: 100%; height: 200px; background: #cbd5e1; border-radius: 24px 24px 0 0;
+            position: relative; background-size: cover; background-position: center;
+        }
+        .profile-header-content {
+            margin-top: -50px; display: flex; flex-direction: column; align-items: center; position: relative;
+        }
+        .profile-avatar-large {
+            width: 120px; height: 120px; border-radius: 50%; border: 5px solid white;
+            background: var(--accent-gradient); color: white; display: flex; align-items: center; justify-content: center;
+            font-size: 3rem; background-size: cover; background-position: center; position: relative;
+        }
+        .upload-overlay {
+            position: absolute; width: 35px; height: 35px; background: rgba(0,0,0,0.6);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            color: white; cursor: pointer; bottom: 0; right: 0; font-size: 1rem; transition:0.2s;
+        }
+        .upload-overlay:hover { background: var(--accent-color); }
+        .cover-upload-btn {
+            position: absolute; bottom: 15px; right: 15px; background: rgba(0,0,0,0.6);
+            color: white; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-size: 0.9rem;
+            display: flex; gap: 8px; align-items: center; transition:0.2s;
+        }
+        .cover-upload-btn:hover { background: rgba(0,0,0,0.8); }
+
         /* Modals & Video */
         #auth-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.98); z-index: 2000; display: flex; justify-content: center; align-items: center; padding: 20px; }
         #video-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0f172a; z-index: 3000; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
-        
         .video-grid { display: flex; gap: 20px; width: 100%; justify-content: center; flex-wrap: wrap; margin-bottom: 30px; flex: 1; align-items: center; }
         video { width: 45%; border-radius: 24px; background: #1e293b; object-fit: cover; max-height: 80vh; border: 2px solid #334155; }
-        
         .call-controls { display: flex; gap: 15px; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 30px; backdrop-filter: blur(10px); }
         .control-btn { width: 50px; height: 50px; border-radius: 50%; border: none; font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; color: white; background: rgba(255,255,255,0.2); }
         .control-btn.active { background: white; color: var(--accent-color); }
         .control-btn.end { background: #ef4444; color: white; }
 
-        /* CUSTOM DIALOG STYLES */
-        #custom-dialog-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); z-index: 9999;
-            justify-content: center; align-items: center; padding: 20px;
-        }
-        .dialog-box {
-            background: white; width: 100%; max-width: 400px; border-radius: 24px;
-            padding: 30px; box-shadow: 0 20px 50px rgba(0,0,0,0.2);
-            text-align: center; display: flex; flex-direction: column; gap: 15px;
-            animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        }
+        /* Custom Dialog */
+        #custom-dialog-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); z-index: 9999; justify-content: center; align-items: center; padding: 20px; }
+        .dialog-box { background: white; width: 100%; max-width: 400px; border-radius: 24px; padding: 30px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); text-align: center; display: flex; flex-direction: column; gap: 15px; animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         
-        /* Notifications View */
+        /* Notifications */
         #view-notifications { display: none; width: 100%; max-width: 600px; flex-direction: column; gap: 10px; }
         .notif-item { display: flex; align-items: center; gap: 15px; padding: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); }
-        .notif-item:last-child { border: none; }
-        
+
         /* Progress Bar */
         #upload-progress { width: 100%; height: 4px; background: #e2e8f0; border-radius: 2px; margin-top: 10px; display: none; overflow: hidden; }
         #upload-bar { width: 0%; height: 100%; background: var(--accent-gradient); transition: 0.3s; }
-
-        /* Emoji Picker Placeholder */
         .emoji-list { display: none; position: absolute; bottom: 60px; right: 20px; background: white; padding: 10px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; width: 200px; }
 
-        /* Responsive */
         @media (max-width: 768px) {
             header { height: 60px; padding: 0 15px; }
             .container { flex-direction: column-reverse; height: calc(100dvh - 60px); }
@@ -373,8 +339,20 @@
         <div class="logo" onclick="switchView('feed')">
             <i class="fas fa-shapes"></i> Socialbook
         </div>
-        <div style="display:flex; gap:10px; align-items:center;">
-            <div class="user-status">Offline</div>
+        <div class="user-menu" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'">
+            <div class="user-pill">
+                <div class="user-pill-avatar" id="header-avatar"></div>
+                <span id="header-username" style="font-weight: 600; font-size: 0.9rem;">...</span>
+                <i class="fas fa-chevron-down" style="font-size: 0.8rem; opacity: 0.5;"></i>
+            </div>
+            <div id="user-dropdown" class="user-dropdown-content">
+                <div class="user-dropdown-item" onclick="openTimeline(currentUser)">
+                    <i class="fas fa-user"></i> Profile
+                </div>
+                <div class="user-dropdown-item" onclick="handleSignOut()" style="color: #ef4444;">
+                    <i class="fas fa-sign-out-alt"></i> Sign Out
+                </div>
+            </div>
         </div>
     </header>
 
@@ -388,10 +366,6 @@
             </div>
             <div class="nav-item" onclick="switchView('notifications', this)">
                 <i class="fas fa-bell"></i> <span>Alerts</span>
-            </div>
-            <div style="flex:1;"></div>
-            <div class="nav-item" onclick="handleSignOut()" style="color: #ef4444;">
-                <i class="fas fa-sign-out-alt"></i> <span>Sign Out</span>
             </div>
         </aside>
 
@@ -409,13 +383,11 @@
                                 <i class="fas fa-photo-video"></i> Media
                                 <input type="file" id="post-files" accept="image/*,video/*" multiple style="display: none;" onchange="handleFileSelect(this)">
                             </label>
-                            
                             <select id="post-privacy" class="input-modern" style="margin:0; width: auto; padding: 8px; font-size: 0.9rem;">
                                 <option value="public">🌎 Public</option>
                                 <option value="friends">👥 Friends</option>
                                 <option value="private">🔒 Only Me</option>
                             </select>
-                            
                             <label style="font-size: 0.9rem; display: flex; align-items: center; gap: 5px; cursor: pointer;">
                                 <input type="checkbox" id="post-livestream"> <span style="color: #ef4444; font-weight: bold;">🔴 Live</span>
                             </label>
@@ -450,7 +422,6 @@
                                 <span style="cursor:pointer; font-size:1.5rem;" onclick="addEmoji('😂')">😂</span>
                                 <span style="cursor:pointer; font-size:1.5rem;" onclick="addEmoji('❤️')">❤️</span>
                                 <span style="cursor:pointer; font-size:1.5rem;" onclick="addEmoji('👍')">👍</span>
-                                <span style="cursor:pointer; font-size:1.5rem;" onclick="addEmoji('😮')">😮</span>
                             </div>
 
                             <button class="btn-icon" onclick="document.getElementById('emoji-picker').style.display = document.getElementById('emoji-picker').style.display=='none'?'grid':'none'">😊</button>
@@ -475,12 +446,29 @@
             </div>
 
             <div id="view-timeline" style="display: none;">
-                <div class="glass-panel profile-header fade-in">
-                    <div class="profile-avatar" id="profile-avatar-display">U</div>
-                    <h1 id="profile-username" style="margin-bottom: 5px;">Username</h1>
-                    <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px;">
-                        <button id="btn-add-friend" class="btn-modern" onclick="addFriendAction()">Add Friend</button>
-                        <button id="btn-msg-friend" class="btn-modern" style="background: #10b981; display: none;" onclick="messageFriendAction()">Message</button>
+                <div class="glass-panel fade-in" style="padding: 0; overflow: hidden;">
+                    <div class="profile-cover" id="profile-cover-display">
+                        <label class="cover-upload-btn" id="cover-upload-btn" style="display: none;">
+                            <i class="fas fa-camera"></i> Edit Cover
+                            <input type="file" accept="image/*" style="display: none;" onchange="updateCoverPhoto(this)">
+                        </label>
+                    </div>
+                    
+                    <div class="profile-header-content" style="padding: 0 25px 25px 25px;">
+                        <div class="profile-avatar-large" id="profile-avatar-display">
+                            <span id="profile-initial">U</span>
+                            <label class="upload-overlay" id="avatar-upload-btn" style="display: none;">
+                                <i class="fas fa-camera"></i>
+                                <input type="file" accept="image/*" style="display: none;" onchange="updateProfilePic(this)">
+                            </label>
+                        </div>
+                        
+                        <h1 id="profile-username" style="margin-top: 10px;">Username</h1>
+                        
+                        <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px;">
+                            <button id="btn-add-friend" class="btn-modern" onclick="addFriendAction()">Add Friend</button>
+                            <button id="btn-msg-friend" class="btn-modern" style="background: #10b981; display: none;" onclick="messageFriendAction()">Message</button>
+                        </div>
                     </div>
                 </div>
                 <div id="timeline-stream" style="width: 100%; max-width: 650px; display: flex; flex-direction: column; gap: 25px;"></div>
