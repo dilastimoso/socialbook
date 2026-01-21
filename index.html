@@ -34,7 +34,7 @@
                 radial-gradient(at 0% 50%, hsla(268,100%,94%,1) 0px, transparent 50%);
             color: var(--text-dark);
             font-family: 'Inter', sans-serif;
-            height: 100vh;
+            height: 100dvh; /* Changed to dvh for mobile browsers */
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -81,7 +81,7 @@
         .container {
             display: flex;
             flex: 1;
-            height: calc(100vh - 70px);
+            height: calc(100dvh - 70px);
             overflow: hidden;
             position: relative;
         }
@@ -223,7 +223,8 @@
 
         /* Messenger */
         #view-messages { display: none; width: 100%; height: 100%; }
-        .messenger-container { display: flex; height: 100%; max-width: 900px; margin: 0 auto; gap: 20px; }
+        /* Fix: added min-height:0 to allow flex children to scroll */
+        .messenger-container { display: flex; height: 100%; max-width: 900px; margin: 0 auto; gap: 20px; min-height: 0; }
         
         .friend-list {
             width: 250px;
@@ -247,11 +248,25 @@
         }
         .friend-item:hover, .friend-item.active { background: white; color: var(--accent-color); }
 
-        .chat-area { flex: 1; display: flex; flex-direction: column; background: rgba(255,255,255,0.8); border-radius: 24px; padding: 20px; min-width: 0; }
-        .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 15px; }
-        .chat-window { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+        /* Chat Area Scroller Fixes */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: rgba(255,255,255,0.8); border-radius: 24px; padding: 20px; min-width: 0; min-height: 0; }
+        .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 15px; flex-shrink: 0; }
+        
+        /* SCROLL FIX: Added min-height: 0 and overflow-y auto properly */
+        .chat-window { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; min-height: 0; }
 
-        .msg-bubble { max-width: 85%; padding: 12px 18px; border-radius: 20px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; }
+        /* BUBBLE FIX: Added word-break: break-word and white-space: pre-wrap */
+        .msg-bubble { 
+            max-width: 85%; 
+            padding: 12px 18px; 
+            border-radius: 20px; 
+            font-size: 0.95rem; 
+            line-height: 1.5; 
+            word-wrap: break-word; 
+            word-break: break-word; /* Critical for long words */
+            white-space: pre-wrap;  /* Critical for preserving lines */
+            position: relative;
+        }
         .msg-mine { align-self: flex-end; background: var(--accent-gradient); color: white; border-bottom-right-radius: 4px; }
         .msg-theirs { align-self: flex-start; background: white; color: var(--text-dark); border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
 
@@ -296,7 +311,6 @@
 
         /* 2. PHONE (Mobile) */
         @media (max-width: 768px) {
-            body { height: 100dvh; /* Dynamic viewport height for mobile browsers */ }
             header { height: 60px; padding: 0 15px; }
             .logo { font-size: 1.3rem; }
             
@@ -360,6 +374,10 @@
             .chat-area {
                 border-radius: 15px 15px 0 0;
                 padding: 15px;
+                /* Ensure chat area takes remaining height */
+                flex: 1;
+                display: flex;
+                flex-direction: column;
             }
 
             /* Video Call Mobile */
@@ -407,8 +425,8 @@
         </div>
         <div id="video-status" style="color: white; margin-bottom: 20px; font-weight: 500;">Ready</div>
         <div style="display: flex; gap: 20px;">
-            <button class="btn-modern" style="background: #10b981;" onclick="startHost()"><i class="fas fa-phone"></i> Call</button>
-            <button class="btn-modern" style="background: #3b82f6;" onclick="startJoin()"><i class="fas fa-video"></i> Join</button>
+            <button id="btn-start-call" class="btn-modern" style="background: #10b981;" onclick="startHost()"><i class="fas fa-phone"></i> Call</button>
+            <button id="btn-join-call" class="btn-modern" style="background: #3b82f6;" onclick="startJoin()"><i class="fas fa-video"></i> Join</button>
             <button class="btn-modern" style="background: #ef4444;" onclick="closeVideo()"><i class="fas fa-phone-slash"></i> End</button>
         </div>
     </div>
@@ -485,7 +503,7 @@
                             <button class="btn-modern" onclick="openVideoModal()"><i class="fas fa-video"></i></button>
                         </div>
                         <div id="chat-window" class="chat-window"></div>
-                        <div style="padding-top: 20px; display: flex; gap: 12px; align-items: center;">
+                        <div style="padding-top: 20px; display: flex; gap: 12px; align-items: center; flex-shrink: 0;">
                             <label class="btn-icon">
                                 <i class="fas fa-image"></i>
                                 <input type="file" id="msg-image" accept="image/*" style="display: none;">
