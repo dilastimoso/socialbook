@@ -21,8 +21,8 @@ let viewedProfile = null;
 const GLOBAL_NET_KEY = "SocialBook_Universal_Link_2026";
 let chatListenerRef = null; 
 window.currentRoomId = null;
-let activeCall = null; // { type: 'video'|'audio', role: 'host'|'guest', id: 'call_id' }
-let pendingFiles = []; // For post uploads
+let activeCall = null; 
+let pendingFiles = [];
 
 /* --- CUSTOM DIALOG SYSTEM --- */
 let dialogCallback = null;
@@ -75,27 +75,24 @@ const toBase64 = file => new Promise((resolve, reject) => {
     reader.onload = () => resolve(reader.result); reader.onerror = reject;
 });
 
-/* --- UI --- */
+/* --- UI & AUTH --- */
 function switchView(viewName, el) {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     if(el) el.classList.add('active');
     ['feed', 'messages', 'timeline', 'notifications'].forEach(v => document.getElementById(`view-${v}`).style.display = 'none');
     document.getElementById(`view-${viewName}`).style.display = 'flex';
-    
     if(viewName === 'feed') loadFeed();
     if(viewName === 'messages') renderFriendList();
     if(viewName === 'notifications') loadNotifications();
 }
 
-/* --- AUTH --- */
 auth.onAuthStateChanged(user => {
     const modal = document.getElementById('auth-modal');
     if (user) {
         currentUser = user.email.split('@')[0]; 
         modal.style.display = 'none';
-        document.querySelector('.user-status').innerText = currentUser;
+        updateHeaderUser();
         loadFeed();
-        requestNotificationPermission();
         listenForCalls();
     } else {
         modal.style.display = 'flex';
@@ -103,6 +100,22 @@ auth.onAuthStateChanged(user => {
     }
     document.getElementById('login-loading').style.display = 'none';
 });
+
+async function updateHeaderUser() {
+    // Load profile pic for header
+    const snap = await db.ref(`users/${currentUser}/profilePic`).once('value');
+    const pic = snap.val();
+    const avatarEl = document.getElementById('header-avatar');
+    document.getElementById('header-username').innerText = currentUser;
+    
+    if(pic) {
+        avatarEl.style.backgroundImage = `url(${pic})`;
+        avatarEl.innerText = '';
+    } else {
+        avatarEl.style.backgroundImage = 'none';
+        avatarEl.innerText = currentUser[0].toUpperCase();
+    }
+}
 
 async function handleLogin() {
     const u = document.getElementById('auth-username').value.trim();
@@ -128,70 +141,32 @@ function handleSignOut() {
     });
 }
 
-/* --- NOTIFICATIONS --- */
-function requestNotificationPermission() {
-    if (Notification.permission !== "granted") Notification.requestPermission();
-}
-function sendBrowserNotification(title, body) {
-    if (document.hidden && Notification.permission === "granted") {
-        new Notification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/3119/3119338.png' });
-    }
-}
-function addAppNotification(text) {
-    db.ref(`notifications/${currentUser}`).push({ text: text, date: Date.now(), read: false });
-}
-function loadNotifications() {
-    const list = document.getElementById('notif-list');
-    db.ref(`notifications/${currentUser}`).limitToLast(20).on('value', snap => {
-        list.innerHTML = '';
-        const notifs = [];
-        snap.forEach(c => notifs.push(c.val()));
-        if(notifs.length === 0) list.innerHTML = '<div style="padding:20px; text-align:center; color:#999;">No notifications</div>';
-        notifs.reverse().forEach(n => {
-            list.innerHTML += `<div class="notif-item glass-panel" style="padding:15px; margin-bottom:10px;">
-                <i class="fas fa-bell" style="color:var(--accent-color)"></i>
-                <div>
-                    <div style="font-size:0.9rem;">${n.text}</div>
-                    <div style="font-size:0.7rem; color:#888;">${new Date(n.date).toLocaleTimeString()}</div>
-                </div>
-            </div>`;
-        });
-    });
-}
-
 /* --- POSTS --- */
 function handleFileSelect(input) {
     const preview = document.getElementById('upload-preview');
     preview.innerHTML = '';
     pendingFiles = Array.from(input.files);
-    
     pendingFiles.forEach(file => {
         const reader = new FileReader();
         reader.onload = e => {
             const isVid = file.type.startsWith('video');
             const el = isVid ? document.createElement('video') : document.createElement('img');
-            el.src = e.target.result;
-            el.className = 'post-media';
+            el.src = e.target.result; el.className = 'post-media';
             if(isVid) el.controls = true;
             preview.appendChild(el);
         };
         reader.readAsDataURL(file);
     });
 }
-
 async function createPost() {
     const txt = document.getElementById('post-input').value;
     const privacy = document.getElementById('post-privacy').value;
     const isLive = document.getElementById('post-livestream').checked;
-
     if(!txt && pendingFiles.length === 0 && !isLive) return;
 
-    // Show Progress
     const progress = document.getElementById('upload-progress');
     const bar = document.getElementById('upload-bar');
     progress.style.display = 'block';
-    
-    // Simulate Progress
     let width = 0;
     const interval = setInterval(() => { if(width<90) { width+=10; bar.style.width = width+'%'; } }, 200);
 
@@ -200,24 +175,15 @@ async function createPost() {
         const b64 = await toBase64(file);
         mediaList.push({ type: file.type.startsWith('video')?'video':'image', src: b64 });
     }
-
-    clearInterval(interval);
-    bar.style.width = '100%';
+    clearInterval(interval); bar.style.width = '100%';
 
     const postRef = db.ref('posts').push();
     const data = { 
-        author: currentUser, 
-        content: txt, 
-        media: mediaList, 
-        date: new Date().toLocaleString(),
-        likes: [], comments: [], privacy: privacy,
-        isLive: isLive,
-        streamStatus: isLive ? 'active' : 'off'
+        author: currentUser, content: txt, media: mediaList, date: new Date().toLocaleString(),
+        likes: [], comments: [], privacy: privacy, isLive: isLive, streamStatus: isLive ? 'active' : 'off'
     };
-
     await postRef.set(encryptData(data));
     
-    // Reset UI
     setTimeout(() => { progress.style.display = 'none'; bar.style.width = '0%'; }, 500);
     document.getElementById('post-input').value = '';
     document.getElementById('upload-preview').innerHTML = '';
@@ -233,7 +199,6 @@ function loadFeed(filterUser=null) {
     db.ref('posts').on('value', async (snap) => {
         const userSnap = await db.ref('users/' + currentUser).once('value');
         const friends = (userSnap.val() && userSnap.val().friends) || [];
-        
         container.innerHTML = '';
         const posts = [];
         snap.forEach(c => {
@@ -245,40 +210,33 @@ function loadFeed(filterUser=null) {
                 if(show) posts.push(p);
             }
         });
-        
         posts.reverse().forEach(p => {
             if(filterUser && p.author !== filterUser) return;
             renderPost(p, container);
         });
     });
 }
-
 function renderPost(p, container) {
     const div = document.createElement('div');
     div.className = 'glass-panel';
     const isMine = p.author === currentUser;
     const isLive = p.isLive && p.streamStatus === 'active';
-    
-    // Media Grid
     let mediaHtml = '';
     if(p.media && p.media.length > 0) {
         const gridClass = p.media.length > 1 ? 'multi' : 'single';
         mediaHtml = `<div class="media-grid ${gridClass}">`;
         p.media.forEach(m => {
-            mediaHtml += m.type === 'video' 
-                ? `<video src="${m.src}" class="post-media" controls></video>`
-                : `<img src="${m.src}" class="post-media" onclick="openImageModal(this.src)">`;
+            mediaHtml += m.type === 'video' ? `<video src="${m.src}" class="post-media" controls></video>` : `<img src="${m.src}" class="post-media">`;
         });
         mediaHtml += '</div>';
     }
-
     div.innerHTML = `
         <div class="post-header">
             <div class="post-user-info">
-                <div class="avatar">${p.author[0].toUpperCase()}</div>
+                <div class="avatar" style="background-image:url(${p.userPic||''})">${!p.userPic?p.author[0]:''}</div>
                 <div>
                     <div class="username">${p.author} ${isLive ? '<span style="color:red; margin-left:5px;">LIVE 🔴</span>' : ''}</div>
-                    <div class="timestamp">${p.date} • ${p.privacy === 'private' ? '🔒' : p.privacy === 'friends' ? '👥' : '🌎'}</div>
+                    <div class="timestamp">${p.date}</div>
                 </div>
             </div>
             ${isMine ? `<button class="btn-icon" onclick="deletePost('${p.key}')" style="color:#ef4444;"><i class="fas fa-trash"></i></button>` : ''}
@@ -287,23 +245,12 @@ function renderPost(p, container) {
         ${mediaHtml}
         <div class="post-actions">
             <div class="action-btn" onclick="toggleLike('${p.key}')"><i class="far fa-heart"></i> ${p.likes ? p.likes.length : 0}</div>
-            <div class="action-btn" onclick="this.parentElement.nextElementSibling.style.display='block'"><i class="far fa-comment"></i> ${p.comments ? p.comments.length : 0}</div>
             ${isLive ? `<div class="action-btn" style="color:red;" onclick="joinLiveStream('${p.key}')"><i class="fas fa-tv"></i> Watch</div>` : ''}
-        </div>
-        <div class="comments-section" style="display:none;">
-            ${(p.comments||[]).map(c=>`<div class="comment"><b>${c.author}:</b> ${c.text}</div>`).join('')}
-            <div style="display:flex; gap:10px; margin-top:10px;">
-                <input class="input-modern" placeholder="Comment..." style="margin:0;">
-                <button class="btn-modern" onclick="addComment('${p.key}', this)">Send</button>
-            </div>
         </div>
     `;
     container.appendChild(div);
 }
-
-function deletePost(key) {
-    showCustomConfirm("Delete this post?", () => db.ref('posts/' + key).remove());
-}
+function deletePost(key) { showCustomConfirm("Delete post?", () => db.ref('posts/' + key).remove()); }
 function toggleLike(key) {
     db.ref('posts/'+key).transaction(raw => {
         if(!raw) return raw;
@@ -314,32 +261,14 @@ function toggleLike(key) {
         return encryptData(p);
     });
 }
-function addComment(key, btn) {
-    const val = btn.previousElementSibling.value;
-    if(!val) return;
-    db.ref('posts/'+key).transaction(raw => {
-        let p = decryptData(raw);
-        if(!p.comments) p.comments = [];
-        p.comments.push({author:currentUser, text:val});
-        return encryptData(p);
-    });
-}
 
-/* --- CHAT --- */
-function addEmoji(emoji) {
-    const inp = document.getElementById('msg-input');
-    inp.value += emoji;
-    document.getElementById('emoji-picker').style.display = 'none';
-    inp.focus();
-}
-
+/* --- CHAT WITH FIXED DELETE --- */
 function createGroupChat() {
     showCustomPrompt("Group Name:", name => {
         const gid = 'group_' + Date.now();
         db.ref(`users/${currentUser}/groups/${gid}`).set({name: name, type:'group'});
     });
 }
-
 function renderFriendList() {
     const list = document.getElementById('msg-friend-list');
     db.ref(`users/${currentUser}/friends`).on('value', fSnap => {
@@ -347,25 +276,18 @@ function renderFriendList() {
         db.ref(`users/${currentUser}/groups`).on('value', gSnap => {
             const groups = gSnap.val() || {};
             let html = '<div style="padding:10px; opacity:0.5; font-weight:bold; display:flex; justify-content:space-between;"><span>CHATS</span><i class="fas fa-plus" onclick="createGroupChat()"></i></div>';
-            
             Object.keys(groups).forEach(gid => {
-                html += `<div class="friend-item" onclick="selectChat('${gid}', '${groups[gid].name}', true)">
-                    <div style="width:30px;height:30px;background:var(--accent-gradient);border-radius:50%;"></div> ${groups[gid].name}
-                </div>`;
+                html += `<div class="friend-item" onclick="selectChat('${gid}', '${groups[gid].name}', true)"><div style="width:30px;height:30px;background:var(--accent-gradient);border-radius:50%;"></div> ${groups[gid].name}</div>`;
             });
             friends.forEach(f => {
-                html += `<div class="friend-item" onclick="selectChat('${f}', '${f}', false)">
-                    <div style="width:30px;height:30px;background:#ddd;border-radius:50%;display:flex;align-items:center;justify-content:center;">${f[0]}</div> ${f}
-                </div>`;
+                html += `<div class="friend-item" onclick="selectChat('${f}', '${f}', false)"><div style="width:30px;height:30px;background:#ddd;border-radius:50%;display:flex;align-items:center;justify-content:center;">${f[0]}</div> ${f}</div>`;
             });
             list.innerHTML = html;
         });
     });
 }
-
 function selectChat(id, name, isGroup) {
-    currentChatPartner = id; 
-    currentChatIsGroup = isGroup;
+    currentChatPartner = id; currentChatIsGroup = isGroup;
     window.currentRoomId = isGroup ? id : [currentUser, id].sort().join('_');
     document.getElementById('chat-with-name').innerText = name;
     document.getElementById('chat-window').innerHTML = '';
@@ -373,187 +295,183 @@ function selectChat(id, name, isGroup) {
     if(chatListenerRef) chatListenerRef.off();
     chatListenerRef = db.ref('chats/' + window.currentRoomId);
     
+    // FIX: Properly handling delete button creation
     chatListenerRef.on('child_added', s => {
         const m = decryptData(s.val());
         if(!m) return;
         const isMe = m.author === currentUser;
         const div = document.createElement('div');
         div.className = `msg-bubble ${isMe ? 'msg-mine' : 'msg-theirs'}`;
-        div.innerHTML = `${isGroup && !isMe ? `<div style="font-size:0.7rem;opacity:0.7;">${m.author}</div>` : ''}
-            ${m.text} ${m.image ? `<br><img src="${m.image}" style="max-width:200px;border-radius:10px;margin-top:5px;">` : ''}`;
-        document.getElementById('chat-window').appendChild(div);
+        div.id = `msg-${s.key}`;
         
-        // Notify if background
-        if(!isMe) sendBrowserNotification("New Message", `${m.author}: ${m.text}`);
+        // Delete button HTML
+        const delBtn = isMe ? `<i class="fas fa-trash" onclick="deleteMessage('${s.key}')" style="position:absolute; left:-25px; top:50%; transform:translateY(-50%); color:#ef4444; cursor:pointer; font-size:0.8rem; opacity:0.7;"></i>` : '';
+        
+        div.innerHTML = `${isGroup && !isMe ? `<div style="font-size:0.7rem;opacity:0.7;">${m.author}</div>` : ''}
+            ${m.text} ${m.image ? `<br><img src="${m.image}" style="max-width:200px;border-radius:10px;margin-top:5px;">` : ''}
+            ${delBtn}`;
+            
+        document.getElementById('chat-window').appendChild(div);
+    });
+    
+    // Listen for removals
+    chatListenerRef.on('child_removed', s => {
+        const el = document.getElementById(`msg-${s.key}`);
+        if(el) el.remove();
+    });
+}
+function sendMessage() {
+    const inp = document.getElementById('msg-input');
+    if(!inp.value) return;
+    const data = { author: currentUser, text: inp.value, date: Date.now() };
+    db.ref('chats/' + window.currentRoomId).push(encryptData(data));
+    inp.value = '';
+}
+function deleteMessage(key) {
+    showCustomConfirm("Unsend message?", () => {
+        db.ref('chats/' + window.currentRoomId + '/' + key).remove();
     });
 }
 
-async function sendMessage() {
-    const inp = document.getElementById('msg-input');
-    const file = document.getElementById('msg-image');
-    if(!inp.value && !file.files[0]) return;
+/* --- TIMELINE PROFILE & COVER --- */
+async function openTimeline(username) {
+    viewedProfile = username;
+    switchView('timeline');
+    document.getElementById('profile-username').innerText = username;
     
-    let img = null;
-    if(file.files[0]) img = await toBase64(file.files[0]);
+    // Fetch user data
+    const snap = await db.ref('users/' + username).once('value');
+    const uData = snap.val() || {};
     
-    const data = { author: currentUser, text: inp.value, image: img, date: Date.now() };
-    db.ref('chats/' + window.currentRoomId).push(encryptData(data));
-    inp.value = ''; file.value = '';
+    const coverEl = document.getElementById('profile-cover-display');
+    const avatarEl = document.getElementById('profile-avatar-display');
+    const initialEl = document.getElementById('profile-initial');
+    const avatarBtn = document.getElementById('avatar-upload-btn');
+    const coverBtn = document.getElementById('cover-upload-btn');
     
-    // Notify recipient (Simulated)
-    if(!currentChatIsGroup) addAppNotification(`New message from ${currentUser}`);
+    // Setup Cover
+    if(uData.coverPic) coverEl.style.backgroundImage = `url(${uData.coverPic})`;
+    else coverEl.style.backgroundImage = 'none';
+
+    // Setup Avatar
+    if(uData.profilePic) {
+        avatarEl.style.backgroundImage = `url(${uData.profilePic})`;
+        initialEl.style.display = 'none';
+    } else {
+        avatarEl.style.backgroundImage = 'none';
+        initialEl.style.display = 'block';
+        initialEl.innerText = username[0].toUpperCase();
+    }
+
+    // Show upload buttons only if my profile
+    if(username === currentUser) {
+        avatarBtn.style.display = 'flex';
+        coverBtn.style.display = 'flex';
+    } else {
+        avatarBtn.style.display = 'none';
+        coverBtn.style.display = 'none';
+    }
+    
+    loadFeed(username);
 }
 
-/* --- CALLING & LIVE --- */
+async function updateProfilePic(input) {
+    if(input.files[0]) {
+        const b64 = await toBase64(input.files[0]);
+        await db.ref(`users/${currentUser}/profilePic`).set(b64);
+        openTimeline(currentUser);
+        updateHeaderUser();
+    }
+}
+
+async function updateCoverPhoto(input) {
+    if(input.files[0]) {
+        const b64 = await toBase64(input.files[0]);
+        await db.ref(`users/${currentUser}/coverPic`).set(b64);
+        openTimeline(currentUser);
+    }
+}
+
+/* --- FIXED WEB-RTC CALLS --- */
 let localStream, pc;
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-// 1. Initiate Call
 function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Select a chat first");
     const callId = window.currentRoomId;
-    
-    // Notify other user via DB
-    db.ref(`calls/${callId}`).set({
-        caller: currentUser,
-        type: type,
-        status: 'ringing',
-        timestamp: Date.now()
-    });
-    
-    openVideoModal('calling', type);
+    db.ref(`calls/${callId}`).set({ caller: currentUser, type: type, status: 'ringing', timestamp: Date.now() });
     activeCall = { id: callId, type: type, role: 'host' };
+    openVideoModal('calling', type);
     
-    // Listen for answer
     db.ref(`calls/${callId}/status`).on('value', s => {
-        if(s.val() === 'accepted') startWebRTC(true); // I am caller (Host)
-        if(s.val() === 'rejected') { endCallAction(); showCustomAlert("Call Declined"); }
+        if(s.val() === 'accepted') startWebRTC(true);
+        if(s.val() === 'rejected') endCallAction();
     });
 }
 
-// 2. Incoming Call Listener
 function listenForCalls() {
     db.ref('calls').on('child_added', snap => {
         const val = snap.val();
         if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
-        
-        // Check if I am part of this room (Very basic check for DM)
+        // Simple check if this call belongs to me
         if(snap.key.includes(currentUser)) {
-            showCustomConfirm(`${val.caller} is calling you (${val.type}). Accept?`, () => {
+            showCustomConfirm(`${val.caller} is calling (${val.type}). Answer?`, () => {
                 db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
                 activeCall = { id: snap.key, type: val.type, role: 'guest' };
                 openVideoModal('answer', val.type);
-                startWebRTC(false); // I am answering (Guest)
+                startWebRTC(false);
             });
         }
     });
 }
 
-// 3. Live Stream Logic
-function startLiveBroadcast(postId) {
-    activeCall = { id: postId, type: 'live', role: 'host' };
-    openVideoModal('live', 'video');
-    startWebRTC(true, true); // Host, Live Mode
-}
-function joinLiveStream(postId) {
-    activeCall = { id: postId, type: 'live', role: 'guest' };
-    openVideoModal('watch', 'video');
-    startWebRTC(false, true);
-}
-
-// 4. WebRTC Core
-async function startWebRTC(isOfferer, isLive=false) {
+async function startWebRTC(isOfferer) {
     const { id, type } = activeCall;
-    
-    // Get Media
-    if (activeCall.role === 'host' || !isLive) {
-        localStream = await navigator.mediaDevices.getUserMedia({ 
-            video: type === 'video' || type === 'live', 
-            audio: true 
-        });
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video', audio: true });
         document.getElementById('localVideo').srcObject = localStream;
-    }
+    } catch(e) { console.log(e); }
 
     pc = new RTCPeerConnection(rtcConfig);
-    
     if(localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
     
     pc.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
     
-    const path = isLive ? `livestreams/${id}` : `calls/${id}`;
-    
-    // ICE Candidates
     pc.onicecandidate = e => {
-        if(e.candidate) db.ref(`${path}/${isOfferer ? 'offer_ice' : 'answer_ice'}`).push(JSON.stringify(e.candidate));
+        if(e.candidate) db.ref(`calls/${id}/${isOfferer?'offer_ice':'answer_ice'}`).push(JSON.stringify(e.candidate));
     };
-    db.ref(`${path}/${!isOfferer ? 'offer_ice' : 'answer_ice'}`).on('child_added', s => {
-        if(pc.remoteDescription) pc.addIceCandidate(JSON.parse(s.val()));
-    });
 
     if(isOfferer) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        db.ref(`${path}/offer`).set(JSON.stringify(offer));
-        
-        db.ref(`${path}/answer`).on('value', async s => {
-            if(s.val() && !pc.currentRemoteDescription) {
-                await pc.setRemoteDescription(JSON.parse(s.val()));
-                document.getElementById('video-status').innerText = isLive ? "🔴 Live" : "Connected";
-            }
+        db.ref(`calls/${id}/offer`).set(JSON.stringify(offer));
+        db.ref(`calls/${id}/answer`).on('value', async s => {
+            if(s.val() && !pc.currentRemoteDescription) await pc.setRemoteDescription(JSON.parse(s.val()));
         });
     } else {
-        const offerSnap = await db.ref(`${path}/offer`).once('value');
+        const offerSnap = await db.ref(`calls/${id}/offer`).once('value');
         await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        db.ref(`${path}/answer`).set(JSON.stringify(answer));
-        document.getElementById('video-status').innerText = "Connected";
-    }
-}
-
-// 5. Controls
-function toggleCam() {
-    const track = localStream.getVideoTracks()[0];
-    track.enabled = !track.enabled;
-    document.getElementById('btn-cam').classList.toggle('active');
-}
-function toggleMic() {
-    const track = localStream.getAudioTracks()[0];
-    track.enabled = !track.enabled;
-    document.getElementById('btn-mic').classList.toggle('active');
-}
-function endCallAction() {
-    if(!activeCall) return;
-    const { id, type, role } = activeCall;
-    
-    if(type === 'live' && role === 'host') {
-        // End broadcast
-        db.ref(`posts/${id}`).update({ streamStatus: 'ended' }); // Logic needs decryption in real app, simplified here
-        // Actually for encrypted posts we can't update easily without fetch-decrypt-encrypt. 
-        // For this patch we assume removing the live node works as signal.
-        db.ref(`livestreams/${id}`).remove();
-    } else {
-        // End Call
-        db.ref(`calls/${id}`).update({ status: 'ended' });
+        db.ref(`calls/${id}/answer`).set(JSON.stringify(answer));
     }
     
-    closeVideoModal();
+    db.ref(`calls/${id}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
+        if(pc.remoteDescription) pc.addIceCandidate(JSON.parse(s.val()));
+    });
 }
 
-/* --- MODAL HELPERS --- */
 function openVideoModal(mode, type) {
-    const m = document.getElementById('video-modal');
-    m.style.display = 'flex';
-    document.getElementById('call-type-label').innerText = type === 'live' ? 'Live Stream' : (type === 'audio' ? 'Audio Call' : 'Video Call');
-    
-    // UI Tweaks per mode
-    document.getElementById('localVideo').style.display = (activeCall.role === 'guest' && activeCall.type === 'live') ? 'none' : 'block';
+    document.getElementById('video-modal').style.display = 'flex';
+    document.getElementById('call-type-label').innerText = type === 'video' ? 'Video Call' : 'Audio Call';
     if(type === 'audio') document.getElementById('localVideo').style.display = 'none';
+    else document.getElementById('localVideo').style.display = 'block';
 }
-function closeVideoModal() {
+
+function endCallAction() {
+    if(activeCall) db.ref(`calls/${activeCall.id}`).remove();
     document.getElementById('video-modal').style.display = 'none';
     if(localStream) localStream.getTracks().forEach(t => t.stop());
     if(pc) pc.close();
     activeCall = null;
-    localStream = null;
 }
