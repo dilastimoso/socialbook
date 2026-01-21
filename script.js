@@ -24,7 +24,7 @@ window.currentRoomId = null;
 let activeCall = null; 
 let pendingFiles = [];
 
-/* --- CUSTOM DIALOG SYSTEM --- */
+/* --- HELPER FUNCTIONS --- */
 let dialogCallback = null;
 function showCustomAlert(msg, icon='fa-info-circle') {
     const overlay = document.getElementById('custom-dialog-overlay');
@@ -67,7 +67,6 @@ function closeCustomDialog(isOk) {
     dialogCallback = null;
 }
 
-/* --- UTILS --- */
 function encryptData(data) { return CryptoJS.AES.encrypt(JSON.stringify(data), GLOBAL_NET_KEY).toString(); }
 function decryptData(cipher) { try { return JSON.parse(CryptoJS.AES.decrypt(cipher, GLOBAL_NET_KEY).toString(CryptoJS.enc.Utf8)); } catch(e){return null;} }
 const toBase64 = file => new Promise((resolve, reject) => {
@@ -75,7 +74,6 @@ const toBase64 = file => new Promise((resolve, reject) => {
     reader.onload = () => resolve(reader.result); reader.onerror = reject;
 });
 
-/* --- UI & AUTH --- */
 function switchView(viewName, el) {
     if(el) {
         document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -142,7 +140,7 @@ function handleSignOut() {
     });
 }
 
-/* --- POSTS & COMMENTS --- */
+/* --- POSTS --- */
 function handleFileSelect(input) {
     const preview = document.getElementById('upload-preview');
     preview.innerHTML = '';
@@ -231,8 +229,15 @@ function renderPost(p, container) {
         });
         mediaHtml += '</div>';
     }
-    // Comments
     const commentsHtml = (p.comments || []).map(c => `<div class="comment"><b>${c.author}:</b> ${c.text}</div>`).join('');
+
+    // Logic: If live AND mine, show "You are live" (No watch button)
+    // If live AND NOT mine, show "Watch" button
+    let liveAction = '';
+    if(isLive) {
+        if(isMine) liveAction = `<span style="color:red; font-weight:bold; margin-left: auto;">🔴 You are Live</span>`;
+        else liveAction = `<div class="action-btn" style="color:red;" onclick="joinLiveStream('${p.key}')"><i class="fas fa-tv"></i> Watch</div>`;
+    }
 
     div.innerHTML = `
         <div class="post-header">
@@ -250,7 +255,7 @@ function renderPost(p, container) {
         <div class="post-actions">
             <div class="action-btn" onclick="toggleLike('${p.key}')"><i class="far fa-heart"></i> ${p.likes ? p.likes.length : 0}</div>
             <div class="action-btn" onclick="toggleCommentSection('${p.key}')"><i class="far fa-comment"></i> ${p.comments ? p.comments.length : 0}</div>
-            ${isLive ? `<div class="action-btn" style="color:red;" onclick="joinLiveStream('${p.key}')"><i class="fas fa-tv"></i> Watch</div>` : ''}
+            ${liveAction}
         </div>
         <div id="comments-${p.key}" class="comments-section">
             <div class="comments-list">${commentsHtml}</div>
@@ -288,7 +293,7 @@ function addComment(key, btn) {
     });
 }
 
-/* --- CHAT WITH FLEX LAYOUT FIX --- */
+/* --- CHAT --- */
 function createGroupChat() {
     showCustomPrompt("Group Name:", name => {
         const gid = 'group_' + Date.now();
@@ -326,7 +331,6 @@ function selectChat(id, name, isGroup) {
         if(!m) return;
         const isMe = m.author === currentUser;
         
-        // Use Flex Row for reliability
         const row = document.createElement('div');
         row.className = `msg-row ${isMe ? 'mine' : 'theirs'}`;
         row.id = `msg-row-${s.key}`;
@@ -344,7 +348,6 @@ function selectChat(id, name, isGroup) {
             row.appendChild(delBtn);
         }
         row.appendChild(bubble);
-
         document.getElementById('chat-window').appendChild(row);
     });
     
@@ -366,7 +369,7 @@ function deleteMessage(key) {
     });
 }
 
-/* --- TIMELINE PROFILE & COVER --- */
+/* --- TIMELINE --- */
 async function openTimeline(username) {
     viewedProfile = username;
     switchView('timeline');
@@ -453,48 +456,68 @@ function listenForCalls() {
     });
 }
 
-async function startWebRTC(isOfferer) {
+// LIVE STREAM FUNCTIONS
+function startLiveBroadcast(postId) {
+    activeCall = { id: postId, type: 'live', role: 'host' };
+    openVideoModal('live', 'video');
+    startWebRTC(true, true);
+}
+function joinLiveStream(postId) {
+    activeCall = { id: postId, type: 'live', role: 'guest' };
+    openVideoModal('watch', 'video');
+    startWebRTC(false, true);
+}
+
+async function startWebRTC(isOfferer, isLive=false) {
     if(!activeCall) return;
     const { id, type } = activeCall;
     
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video', audio: true });
-        document.getElementById('localVideo').srcObject = localStream;
-    } catch(e) { console.log(e); }
+    // Get media FIRST before creating PC
+    if (activeCall.role === 'host' || !isLive) {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video' || type==='live', audio: true });
+            document.getElementById('localVideo').srcObject = localStream;
+        } catch(e) { console.log("Media Error:", e); }
+    }
 
     pc = new RTCPeerConnection(rtcConfig);
-    if(localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    
+    if(localStream) {
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    }
     
     pc.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
     
+    // Path differentiation for calls vs live
+    const basePath = isLive ? `livestreams/${id}` : `calls/${id}`;
+
     pc.onicecandidate = e => {
-        if(e.candidate) db.ref(`calls/${id}/${isOfferer?'offer_ice':'answer_ice'}`).push(JSON.stringify(e.candidate));
+        if(e.candidate) db.ref(`${basePath}/${isOfferer?'offer_ice':'answer_ice'}`).push(JSON.stringify(e.candidate));
     };
 
     if(isOfferer) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        db.ref(`calls/${id}/offer`).set(JSON.stringify(offer));
+        db.ref(`${basePath}/offer`).set(JSON.stringify(offer));
         
-        db.ref(`calls/${id}/answer`).on('value', async s => {
+        db.ref(`${basePath}/answer`).on('value', async s => {
             if(s.val() && !pc.currentRemoteDescription) {
                 await pc.setRemoteDescription(JSON.parse(s.val()));
-                processCandidateQueue();
+                processCandidateQueue(); // FLUSH QUEUE
             }
         });
     } else {
-        const offerSnap = await db.ref(`calls/${id}/offer`).once('value');
+        const offerSnap = await db.ref(`${basePath}/offer`).once('value');
         if(offerSnap.exists()){
             await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
-            processCandidateQueue();
+            processCandidateQueue(); // FLUSH QUEUE
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            db.ref(`calls/${id}/answer`).set(JSON.stringify(answer));
+            db.ref(`${basePath}/answer`).set(JSON.stringify(answer));
         }
     }
     
-    // Listen for candidates
-    db.ref(`calls/${id}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
+    db.ref(`${basePath}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
         const candidate = JSON.parse(s.val());
         if(pc.remoteDescription) {
             pc.addIceCandidate(candidate);
@@ -512,16 +535,45 @@ function processCandidateQueue() {
 
 function openVideoModal(mode, type) {
     document.getElementById('video-modal').style.display = 'flex';
-    document.getElementById('call-type-label').innerText = type === 'video' ? 'Video Call' : 'Audio Call';
-    if(type === 'audio') document.getElementById('localVideo').style.display = 'none';
-    else document.getElementById('localVideo').style.display = 'block';
+    document.getElementById('call-type-label').innerText = type === 'live' ? 'Live Stream' : (type === 'video' ? 'Video Call' : 'Audio Call');
+    
+    // Hide local video if audio only or if guest watching live
+    if(type === 'audio' || (activeCall.type === 'live' && activeCall.role === 'guest')) {
+        document.getElementById('localVideo').style.display = 'none';
+    } else {
+        document.getElementById('localVideo').style.display = 'block';
+    }
 }
 
 function endCallAction() {
-    if(activeCall) db.ref(`calls/${activeCall.id}`).remove();
+    if(activeCall) {
+        const basePath = activeCall.type === 'live' ? `livestreams/${activeCall.id}` : `calls/${activeCall.id}`;
+        if(activeCall.role === 'host') db.ref(basePath).remove();
+        if(activeCall.type === 'live' && activeCall.role === 'host') {
+             // Update post status to ended
+             db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'}); // Simple update, ideally encrypt
+        }
+    }
     document.getElementById('video-modal').style.display = 'none';
     if(localStream) localStream.getTracks().forEach(t => t.stop());
     if(pc) pc.close();
     activeCall = null;
-    window.location.reload(); // Quick reset to clear call state
+    localStream = null;
+    window.location.reload(); 
+}
+
+/* --- CONTROLS --- */
+function toggleCam() {
+    if(localStream) {
+        const t = localStream.getVideoTracks()[0];
+        if(t) t.enabled = !t.enabled;
+        document.getElementById('btn-cam').classList.toggle('active');
+    }
+}
+function toggleMic() {
+    if(localStream) {
+        const t = localStream.getAudioTracks()[0];
+        if(t) t.enabled = !t.enabled;
+        document.getElementById('btn-mic').classList.toggle('active');
+    }
 }
