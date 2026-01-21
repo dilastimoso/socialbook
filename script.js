@@ -77,13 +77,18 @@ const toBase64 = file => new Promise((resolve, reject) => {
 
 /* --- UI & AUTH --- */
 function switchView(viewName, el) {
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    if(el) el.classList.add('active');
+    if(el) {
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        el.classList.add('active');
+    }
     ['feed', 'messages', 'timeline', 'notifications'].forEach(v => document.getElementById(`view-${v}`).style.display = 'none');
     document.getElementById(`view-${viewName}`).style.display = 'flex';
     if(viewName === 'feed') loadFeed();
     if(viewName === 'messages') renderFriendList();
     if(viewName === 'notifications') loadNotifications();
+    
+    // Hide Dropdown if open
+    document.getElementById('user-dropdown').style.display = 'none';
 }
 
 auth.onAuthStateChanged(user => {
@@ -141,7 +146,7 @@ function handleSignOut() {
     });
 }
 
-/* --- POSTS --- */
+/* --- POSTS & COMMENTS --- */
 function handleFileSelect(input) {
     const preview = document.getElementById('upload-preview');
     preview.innerHTML = '';
@@ -230,12 +235,15 @@ function renderPost(p, container) {
         });
         mediaHtml += '</div>';
     }
+    // Comments HTML
+    const commentsHtml = (p.comments || []).map(c => `<div class="comment"><b>${c.author}:</b> ${c.text}</div>`).join('');
+
     div.innerHTML = `
         <div class="post-header">
             <div class="post-user-info">
-                <div class="avatar" style="background-image:url(${p.userPic||''})">${!p.userPic?p.author[0]:''}</div>
+                <div class="avatar" onclick="openTimeline('${p.author}')" style="background-image:url(${p.userPic||''})">${!p.userPic?p.author[0]:''}</div>
                 <div>
-                    <div class="username">${p.author} ${isLive ? '<span style="color:red; margin-left:5px;">LIVE 🔴</span>' : ''}</div>
+                    <div class="username" onclick="openTimeline('${p.author}')">${p.author} ${isLive ? '<span style="color:red; margin-left:5px;">LIVE 🔴</span>' : ''}</div>
                     <div class="timestamp">${p.date}</div>
                 </div>
             </div>
@@ -245,10 +253,22 @@ function renderPost(p, container) {
         ${mediaHtml}
         <div class="post-actions">
             <div class="action-btn" onclick="toggleLike('${p.key}')"><i class="far fa-heart"></i> ${p.likes ? p.likes.length : 0}</div>
+            <div class="action-btn" onclick="toggleCommentSection('${p.key}')"><i class="far fa-comment"></i> ${p.comments ? p.comments.length : 0}</div>
             ${isLive ? `<div class="action-btn" style="color:red;" onclick="joinLiveStream('${p.key}')"><i class="fas fa-tv"></i> Watch</div>` : ''}
+        </div>
+        <div id="comments-${p.key}" class="comments-section">
+            <div class="comments-list">${commentsHtml}</div>
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <input class="input-modern" placeholder="Comment..." style="margin:0;">
+                <button class="btn-modern" onclick="addComment('${p.key}', this)">Send</button>
+            </div>
         </div>
     `;
     container.appendChild(div);
+}
+function toggleCommentSection(key) {
+    const el = document.getElementById(`comments-${key}`);
+    el.style.display = el.style.display === 'block' ? 'none' : 'block';
 }
 function deletePost(key) { showCustomConfirm("Delete post?", () => db.ref('posts/' + key).remove()); }
 function toggleLike(key) {
@@ -258,6 +278,16 @@ function toggleLike(key) {
         if(!p.likes) p.likes = [];
         if(p.likes.includes(currentUser)) p.likes = p.likes.filter(x=>x!==currentUser);
         else p.likes.push(currentUser);
+        return encryptData(p);
+    });
+}
+function addComment(key, btn) {
+    const val = btn.previousElementSibling.value;
+    if(!val) return;
+    db.ref('posts/'+key).transaction(raw => {
+        let p = decryptData(raw);
+        if(!p.comments) p.comments = [];
+        p.comments.push({author:currentUser, text:val});
         return encryptData(p);
     });
 }
@@ -295,28 +325,39 @@ function selectChat(id, name, isGroup) {
     if(chatListenerRef) chatListenerRef.off();
     chatListenerRef = db.ref('chats/' + window.currentRoomId);
     
-    // FIX: Properly handling delete button creation
     chatListenerRef.on('child_added', s => {
         const m = decryptData(s.val());
         if(!m) return;
         const isMe = m.author === currentUser;
-        const div = document.createElement('div');
-        div.className = `msg-bubble ${isMe ? 'msg-mine' : 'msg-theirs'}`;
-        div.id = `msg-${s.key}`;
         
-        // Delete button HTML
-        const delBtn = isMe ? `<i class="fas fa-trash" onclick="deleteMessage('${s.key}')" style="position:absolute; left:-25px; top:50%; transform:translateY(-50%); color:#ef4444; cursor:pointer; font-size:0.8rem; opacity:0.7;"></i>` : '';
+        // Use Flex Row to position bubbles
+        const row = document.createElement('div');
+        row.className = `msg-row ${isMe ? 'mine' : 'theirs'}`;
+        row.id = `msg-row-${s.key}`;
+
+        const bubble = document.createElement('div');
+        bubble.className = `msg-bubble ${isMe ? 'mine' : 'theirs'}`;
+        bubble.innerHTML = `${isGroup && !isMe ? `<div style="font-size:0.7rem;opacity:0.7;">${m.author}</div>` : ''}
+            ${m.text} ${m.image ? `<br><img src="${m.image}" style="max-width:200px;border-radius:10px;margin-top:5px;">` : ''}`;
         
-        div.innerHTML = `${isGroup && !isMe ? `<div style="font-size:0.7rem;opacity:0.7;">${m.author}</div>` : ''}
-            ${m.text} ${m.image ? `<br><img src="${m.image}" style="max-width:200px;border-radius:10px;margin-top:5px;">` : ''}
-            ${delBtn}`;
-            
-        document.getElementById('chat-window').appendChild(div);
+        // Delete button next to bubble
+        const delBtn = isMe ? document.createElement('i') : null;
+        if(delBtn) {
+            delBtn.className = "fas fa-trash";
+            delBtn.style.cssText = "color:#ef4444; cursor:pointer; font-size:0.8rem; opacity:0.7; padding: 5px;";
+            delBtn.onclick = () => deleteMessage(s.key);
+            // Append order: Delete Btn then Bubble for "Mine" (Flex-end reverses visually if we want, but explicit order is safer)
+            row.appendChild(delBtn);
+            row.appendChild(bubble);
+        } else {
+            row.appendChild(bubble);
+        }
+
+        document.getElementById('chat-window').appendChild(row);
     });
     
-    // Listen for removals
     chatListenerRef.on('child_removed', s => {
-        const el = document.getElementById(`msg-${s.key}`);
+        const el = document.getElementById(`msg-row-${s.key}`);
         if(el) el.remove();
     });
 }
@@ -372,6 +413,8 @@ async function openTimeline(username) {
         coverBtn.style.display = 'none';
     }
     
+    // Hide dropdown
+    document.getElementById('user-dropdown').style.display = 'none';
     loadFeed(username);
 }
 
@@ -413,11 +456,11 @@ function listenForCalls() {
     db.ref('calls').on('child_added', snap => {
         const val = snap.val();
         if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
-        // Simple check if this call belongs to me
         if(snap.key.includes(currentUser)) {
             showCustomConfirm(`${val.caller} is calling (${val.type}). Answer?`, () => {
-                db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
+                // Set activeCall explicitly BEFORE accepting
                 activeCall = { id: snap.key, type: val.type, role: 'guest' };
+                db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
                 openVideoModal('answer', val.type);
                 startWebRTC(false);
             });
@@ -426,7 +469,10 @@ function listenForCalls() {
 }
 
 async function startWebRTC(isOfferer) {
+    // Safety check
+    if(!activeCall) return console.error("No active call found");
     const { id, type } = activeCall;
+    
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video', audio: true });
         document.getElementById('localVideo').srcObject = localStream;
@@ -450,10 +496,12 @@ async function startWebRTC(isOfferer) {
         });
     } else {
         const offerSnap = await db.ref(`calls/${id}/offer`).once('value');
-        await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        db.ref(`calls/${id}/answer`).set(JSON.stringify(answer));
+        if(offerSnap.exists()){
+            await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            db.ref(`calls/${id}/answer`).set(JSON.stringify(answer));
+        }
     }
     
     db.ref(`calls/${id}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
