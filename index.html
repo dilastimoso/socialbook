@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Socialbook</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dropbox.js/10.34.0/Dropbox-sdk.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -195,7 +197,6 @@
         .timestamp { font-size: 0.8rem; color: var(--text-gray); }
         .post-img { width: 100%; border-radius: 16px; margin-top: 15px; border: 1px solid rgba(0,0,0,0.05); }
 
-        /* Comments & Likes */
         .post-actions {
             margin-top:20px; display:flex; gap:20px; color:#64748b; 
             border-top:1px solid rgba(0,0,0,0.05); padding-top:15px;
@@ -208,7 +209,7 @@
             background: rgba(255,255,255,0.5);
             border-radius: 12px;
             padding: 15px;
-            display: none; /* Hidden by default */
+            display: none;
         }
         .comment { font-size: 0.9rem; margin-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.03); padding-bottom: 8px; }
 
@@ -247,7 +248,7 @@
         .profile-header { text-align: center; margin-bottom: 20px; }
         .profile-avatar { width: 100px; height: 100px; border-radius: 30px; background: var(--accent-gradient); margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; color: white; }
         
-        /* Modals & Video (Unchanged styling) */
+        /* Modals & Video */
         #auth-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px); z-index: 2000; display: flex; justify-content: center; align-items: center; }
         #video-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0f172a; z-index: 3000; flex-direction: column; align-items: center; justify-content: center; }
         .video-grid { display: flex; gap: 20px; width: 100%; justify-content: center; flex-wrap: wrap; margin-bottom: 30px; }
@@ -267,7 +268,7 @@
             <input type="password" id="auth-password" class="input-modern" placeholder="Password">
             <button class="btn-modern" style="width: 100%; margin-top: 10px; padding: 14px;" onclick="handleLogin()">Sign In</button>
             <button onclick="handleRegister()" style="background: none; border: none; color: var(--accent-color); margin-top: 20px; cursor: pointer; font-weight: 600;">Create Account</button>
-            <div id="login-loading" style="display:none; margin-top: 15px; font-size: 0.85rem;">Verifying...</div>
+            <div id="login-loading" style="display:none; margin-top: 15px; font-size: 0.85rem;">Connecting to Google Cloud...</div>
         </div>
     </div>
 
@@ -299,7 +300,7 @@
             <div class="nav-item" onclick="switchView('messages', this)">
                 <i class="fas fa-comment-alt"></i> Messenger
             </div>
-            </aside>
+        </aside>
 
         <main>
             <div id="view-feed" style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 25px;">
@@ -332,16 +333,13 @@
                 <div class="glass-panel messenger-container" style="background: rgba(255,255,255,0.9); border: none; padding: 0; overflow: hidden;">
                     <div class="friend-list" id="msg-friend-list">
                         <div style="padding: 10px; font-weight: bold; opacity: 0.5;">FRIENDS</div>
-                        </div>
-
+                    </div>
                     <div class="chat-area">
                         <div class="chat-header">
                             <h3 id="chat-with-name">Select a friend</h3>
                             <button class="btn-modern" onclick="openVideoModal()"><i class="fas fa-video"></i></button>
                         </div>
-                        
                         <div id="chat-window" class="chat-window"></div>
-
                         <div style="padding-top: 20px; display: flex; gap: 12px; align-items: center;">
                             <label class="btn-icon">
                                 <i class="fas fa-image"></i>
