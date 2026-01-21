@@ -1,16 +1,28 @@
 let dbx;
 let currentUser = null;
-let currentChatPartner = null; // Who are we messaging?
-let viewedProfile = null; // Whose timeline are we on?
+let currentChatPartner = null; 
+let viewedProfile = null; 
 const GLOBAL_NET_KEY = "SocialBook_Universal_Link_2026"; 
-const ACCESS_TOKEN = "sl.u.AGQZC-vOPB5s89pRFwIK9dWv8___s4aaQHWbK1BS4LKkcFsBhsR7aMZkHLmiDiXP4ALEboMeUMUyu0xmQpWN1AG41bO9QwJvsIaHeQ4avp1tZjFz5c8JxZCLjSyg49tgV_hbtil5XCpYwyaOvXA0TK09XPXhWDGY3VED30bh9iPdkgbDGRNMI55yi4I_LxCNE8x9ol_pxVWASJ3SwD0oIteD6CHtxzkmkTPX26mL_PwikB50iQr6m01YUGAvTb7vX0hU7X0A6uN3MnPHGJCBziVN9TcdP6bKYMlEGQLBfmRo554lTNZOsPdq5psJcMraLpgF0YlxnRDINBUi5XUgJfKd4ZJeiGOsOcD4O1u5oqDL2WKUutzRsaU4R5bOchAuubOLkZ9uTbMhDr4icD8BSr_ONGGYrv7Z-LoR9m_TEYNV7zJD0DFYQfUtgCYFvlo4AMOnQdq2TWFzG_pWlHUYhnqh2rVoCTHkg_ccpFXuUiBCeS_EjMJbeYj2bgSg6CVYuVU6kYIB25nwgl04Y26aRkS0D95B2aYcOtFC90LqydNuPZ-trhyq7T2zT6vkPcPKABEB25AqEVRZRUQwj7nuDeDh84ZE51yQydePRx4EJmqQOul9oJts8GyC9eHmGk2Edz6bU5xAwcUNORZudMh2n6mvEAIIxLK4s27t-gXyI1N8YQREE8ewJD0C1y2CfYELQibIGCNoeGj7S-qPIeM7MAsf0oOFNt5Td5zukRnkENFwaBoD7DSlUdidmqKWYEcH5U-O_4fa8OiIjCUj5gU8HGMaaWGog7Hz5Dlb74tToxjqkC-at-6OWEaTIt48_qY91yztRMOSqY3gRexHDKwGmoDVYD7Uty-UCHd314NAIgR-ww_EfyhFsVeCMEPgOpPjzC9mC_XfFTcA-oaljvM8HExlYg3TpknRoAM0ASG7ZID0fGsDEMiBawxnaKXfH7pcUZyT75RjkHc3ZgUSM4sLgqBrcMIqMBF_rp7IwvApNnQ7HtDAvj9dYFGBEj5VGMGomBf9sgvoAn6uNiQ-nMGk431iKZt99-Qa9rcLddbi3POt502n3TY83jeA9rYhs8VI1r-kX-z3IyQV-6HYtiBg8DE_9T78b9xxSRsm2Ek71R4DaNE-j-5bx2BKaWh0CkmiHiWuJL8UTZmF4CZ35CMyBuLoa2qqIken4BvyQDQuI47PgHM3PIkWPnBUCkozLB1FX5j-mJ-NzW3U3EMxF2t9kxKo7v-Cbq-9RbnyRfbGo_VvdOm6rQPPKUFABDF3XGbC-N0OljXeEEi4gR-Wk9edwVBdvHWYYyKsO0EabotvWSsI3Q";
+
+// --- PERMANENT AUTH CONFIGURATION ---
+// 1. Enter your App Key and Secret from Dropbox Console
+const APP_KEY = "gxrv17n6zjg8dl3"; 
+const APP_SECRET = "q6wdhrgbqm8j5ef"; 
+
+// 2. Enter the Refresh Token you got from setup.html
+const REFRESH_TOKEN = "JSSOwkEXqmIAAAAAAAAAO6VMyQChG66u7z8iq_4zLfE";
 
 let peerConnection;
 let localStream;
 const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 document.addEventListener('DOMContentLoaded', () => {
-    dbx = new Dropbox.Dropbox({ accessToken: ACCESS_TOKEN });
+    // This connects using the Refresh Token, which auto-renews forever.
+    dbx = new Dropbox.Dropbox({ 
+        clientId: APP_KEY, 
+        clientSecret: APP_SECRET, 
+        refreshToken: REFRESH_TOKEN 
+    });
 });
 
 /* --- UTILS --- */
@@ -45,40 +57,53 @@ async function getUsersDB() {
     try {
         const file = await dbx.filesDownload({ path: '/socialbook_system/users.json' });
         return JSON.parse(await file.result.fileBlob.text());
-    } catch(e) { return {}; }
+    } catch(e) { 
+        // If file is missing (new app), return empty DB
+        const err = JSON.stringify(e);
+        if(err.includes('path/not_found')) return {};
+        
+        // If Auth fails despite Refresh Token, alert user
+        if(err.includes('400') || err.includes('401')) {
+            alert("Auth Error: Check your App Key/Secret/Refresh Token in script.js");
+        }
+        return {};
+    }
 }
 
 async function handleRegister() {
     const u = document.getElementById('auth-username').value.trim();
     const p = document.getElementById('auth-password').value;
     if(!u || !p) return alert("Fill fields");
-    const db = await getUsersDB();
-    if(db[u]) return alert("Username Taken");
-    // User object now stores password hash AND friends list
-    db[u] = { pass: hashPassword(p), friends: [] }; 
-    await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
-    alert("Account Created!");
+    
+    try {
+        const db = await getUsersDB();
+        if(db[u]) return alert("Username Taken");
+        db[u] = { pass: hashPassword(p), friends: [] }; 
+        await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
+        alert("Account Created!");
+    } catch(e) { alert("Registration Failed"); }
 }
 
 async function handleLogin() {
     const u = document.getElementById('auth-username').value.trim();
     const p = document.getElementById('auth-password').value;
     document.getElementById('login-loading').style.display = 'block';
-    const db = await getUsersDB();
     
-    // Backward compatibility for old simple format, check object structure
-    const stored = db[u];
-    const valid = (typeof stored === 'string' && stored === hashPassword(p)) || (stored && stored.pass === hashPassword(p));
+    try {
+        const db = await getUsersDB();
+        const stored = db[u];
+        const valid = (typeof stored === 'string' && stored === hashPassword(p)) || (stored && stored.pass === hashPassword(p));
 
-    if(valid) {
-        currentUser = u;
-        document.getElementById('auth-modal').style.display = 'none';
-        document.querySelector('.user-status').innerText = u;
-        loadFeed();
-        setInterval(loadMessages, 3000); 
-    } else {
-        alert("Invalid");
-    }
+        if(valid) {
+            currentUser = u;
+            document.getElementById('auth-modal').style.display = 'none';
+            document.querySelector('.user-status').innerText = u;
+            loadFeed();
+            setInterval(loadMessages, 3000); 
+        } else {
+            alert("Invalid Credentials");
+        }
+    } catch(e) {}
     document.getElementById('login-loading').style.display = 'none';
 }
 
@@ -112,7 +137,7 @@ async function loadFeed(filterUser = null) {
     try {
         const list = await dbx.filesListFolder({ path: '/socialbook_posts' });
         const files = list.result.entries.sort((a,b) => b.name.localeCompare(a.name));
-        container.innerHTML = ''; // Full refresh is okay for feed
+        container.innerHTML = ''; 
         
         for(const f of files) {
             if(!f.name.endsWith('.json')) continue;
@@ -120,7 +145,6 @@ async function loadFeed(filterUser = null) {
             const post = decryptData(await down.result.fileBlob.text());
             
             if(post) {
-                // If on timeline, filter by user
                 if (filterUser && post.author !== filterUser) continue;
                 renderPost(post, container, f.path_lower);
             }
@@ -183,7 +207,6 @@ async function toggleLike(filePath) {
         post.likes.push(currentUser);
     }
     await dbx.filesUpload({ path: filePath, contents: encryptData(post), mode: 'overwrite' });
-    // Reload current view
     if(viewedProfile) loadFeed(viewedProfile); else loadFeed();
 }
 
@@ -198,7 +221,6 @@ async function addComment(filePath, btn) {
     
     post.comments.push({ author: currentUser, text: text, date: Date.now() });
     await dbx.filesUpload({ path: filePath, contents: encryptData(post), mode: 'overwrite' });
-    
     if(viewedProfile) loadFeed(viewedProfile); else loadFeed();
 }
 
@@ -210,7 +232,6 @@ async function openTimeline(username) {
     document.getElementById('profile-username').innerText = username;
     document.getElementById('profile-avatar-display').innerText = username[0].toUpperCase();
     
-    // Check friend status
     const db = await getUsersDB();
     const myData = db[currentUser];
     const isFriend = myData.friends && myData.friends.includes(username);
@@ -238,14 +259,13 @@ async function addFriendAction() {
     
     if(!db[currentUser].friends.includes(viewedProfile)) {
         db[currentUser].friends.push(viewedProfile);
-        // Add me to their friends too (Mutual for simplicity)
         if(db[viewedProfile] && typeof db[viewedProfile] !== 'string') {
              if(!db[viewedProfile].friends) db[viewedProfile].friends = [];
              db[viewedProfile].friends.push(currentUser);
         }
         await dbx.filesUpload({ path: '/socialbook_system/users.json', contents: JSON.stringify(db), mode: 'overwrite' });
         alert("Friend Added!");
-        openTimeline(viewedProfile); // Refresh
+        openTimeline(viewedProfile); 
     }
 }
 
@@ -254,7 +274,7 @@ function messageFriendAction() {
     switchView('messages');
 }
 
-/* --- MESSAGING (PRIVATE & BLINK FIX) --- */
+/* --- MESSAGING --- */
 async function renderFriendList() {
     const list = document.getElementById('msg-friend-list');
     const db = await getUsersDB();
@@ -272,13 +292,13 @@ async function renderFriendList() {
 
 function selectChat(friend) {
     currentChatPartner = friend;
-    document.getElementById('chat-window').innerHTML = ''; // Clear only when switching chat
-    renderFriendList(); // Update active state
+    document.getElementById('chat-window').innerHTML = ''; 
+    renderFriendList(); 
     loadMessages();
 }
 
 async function sendMessage() {
-    if(!currentUser || !currentChatPartner) return alert("Select a friend to chat");
+    if(!currentUser || !currentChatPartner) return alert("Select a friend");
     const txt = document.getElementById('msg-input').value;
     const fileInput = document.getElementById('msg-image');
     if(!txt && !fileInput.files[0]) return;
@@ -286,11 +306,9 @@ async function sendMessage() {
     let imgData = null;
     if(fileInput.files[0]) imgData = await toBase64(fileInput.files[0]);
 
-    // Format: Participants sorted alphabetically to ensure unique room
     const room = [currentUser, currentChatPartner].sort().join('_');
     const data = { id: Date.now(), author: currentUser, text: txt, image: imgData };
     
-    // Save to room folder
     await dbx.filesUpload({ path: `/socialbook_chats/${room}/${data.id}.json`, contents: encryptData(data) });
     
     document.getElementById('msg-input').value = '';
@@ -312,7 +330,6 @@ async function loadMessages() {
         const files = list.result.entries.sort((a,b) => a.name.localeCompare(b.name)); 
         
         for(const f of files) {
-            // BLINK FIX: Check if message ID already exists in DOM
             const msgId = f.name.replace('.json', '');
             if(document.getElementById(`msg-${msgId}`)) continue; 
 
@@ -321,14 +338,14 @@ async function loadMessages() {
             if(msg) {
                 const isMine = msg.author === currentUser;
                 const div = document.createElement('div');
-                div.id = `msg-${msgId}`; // Assign ID for duplicate check
+                div.id = `msg-${msgId}`; 
                 div.className = `msg-bubble ${isMine ? 'msg-mine' : 'msg-theirs'}`;
                 div.innerHTML = `
                     ${msg.text}
                     ${msg.image ? `<br><img src="${msg.image}" style="max-width:200px; border-radius:12px; margin-top:8px;">` : ''}
                 `;
                 container.appendChild(div);
-                container.scrollTop = container.scrollHeight; // Auto scroll
+                container.scrollTop = container.scrollHeight; 
             }
         }
     } catch(e){}
