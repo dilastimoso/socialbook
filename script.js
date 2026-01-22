@@ -23,6 +23,7 @@ let currentLiveStreamId = null;
 const GLOBAL_NET_KEY = "SocialBook_Universal_Link_2026";
 let chatListenerRef = null; 
 window.currentRoomId = null;
+let activeCall = null; 
 let pendingFiles = [];
 
 /* --- HELPER FUNCTIONS --- */
@@ -73,27 +74,8 @@ function closeCustomDialog(isOk) {
     dialogCallback = null;
 }
 
-function encryptData(data) { 
-    if (!data) return null;
-    try {
-        return CryptoJS.AES.encrypt(JSON.stringify(data), GLOBAL_NET_KEY).toString(); 
-    } catch(e) {
-        console.error("Encryption error:", e);
-        return null;
-    }
-}
-function decryptData(cipher) { 
-    try { 
-        if (!cipher) return null;
-        const bytes = CryptoJS.AES.decrypt(cipher, GLOBAL_NET_KEY);
-        const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-        if (!decrypted) return null;
-        return JSON.parse(decrypted); 
-    } catch(e){
-        console.error("Decryption error:", e);
-        return null;
-    }
-}
+function encryptData(data) { return CryptoJS.AES.encrypt(JSON.stringify(data), GLOBAL_NET_KEY).toString(); }
+function decryptData(cipher) { try { return JSON.parse(CryptoJS.AES.decrypt(cipher, GLOBAL_NET_KEY).toString(CryptoJS.enc.Utf8)); } catch(e){return null;} }
 const toBase64 = file => new Promise((resolve, reject) => {
     const reader = new FileReader(); reader.readAsDataURL(file);
     reader.onload = () => resolve(reader.result); reader.onerror = reject;
@@ -253,24 +235,10 @@ async function createPost() {
 
     const postRef = db.ref('posts').push();
     const data = { 
-        author: currentUser, 
-        content: txt, 
-        media: mediaList, 
-        date: new Date().toLocaleString(),
-        likes: [], 
-        comments: [], 
-        privacy: privacy, 
-        isLive: false, 
-        streamStatus: 'off'
+        author: currentUser, content: txt, media: mediaList, date: new Date().toLocaleString(),
+        likes: [], comments: [], privacy: privacy, isLive: false, streamStatus: 'off'
     };
-    
-    const encryptedData = encryptData(data);
-    if (encryptedData) {
-        await postRef.set(encryptedData);
-    } else {
-        showCustomAlert("Error creating post", "fa-times-circle");
-        return;
-    }
+    await postRef.set(encryptData(data));
     
     setTimeout(() => { progress.style.display = 'none'; bar.style.width = '0%'; }, 500);
     document.getElementById('post-input').value = '';
@@ -368,12 +336,10 @@ function toggleLike(key) {
     db.ref('posts/'+key).transaction(raw => {
         if(!raw) return raw;
         let p = decryptData(raw);
-        if(!p) return raw;
         if(!p.likes) p.likes = [];
         if(p.likes.includes(currentUser)) p.likes = p.likes.filter(x=>x!==currentUser);
         else p.likes.push(currentUser);
-        const encrypted = encryptData(p);
-        return encrypted || raw;
+        return encryptData(p);
     });
 }
 function addComment(key, btn) {
@@ -381,13 +347,10 @@ function addComment(key, btn) {
     if(!val) return;
     db.ref('posts/'+key).transaction(raw => {
         let p = decryptData(raw);
-        if(!p) return raw;
         if(!p.comments) p.comments = [];
         p.comments.push({author:currentUser, text:val});
-        const encrypted = encryptData(p);
-        return encrypted || raw;
+        return encryptData(p);
     });
-    btn.previousElementSibling.value = '';
 }
 
 /* --- CHAT --- */
@@ -456,7 +419,6 @@ function selectChat(id, name, isGroup) {
         }
         row.appendChild(bubble);
         document.getElementById('chat-window').appendChild(row);
-        document.getElementById('chat-window').scrollTop = document.getElementById('chat-window').scrollHeight;
     });
     
     chatListenerRef.on('child_removed', s => {
@@ -474,10 +436,7 @@ async function handleMessageImage(input) {
             image: b64, 
             date: Date.now() 
         };
-        const encrypted = encryptData(data);
-        if (encrypted) {
-            db.ref('chats/' + window.currentRoomId).push(encrypted);
-        }
+        db.ref('chats/' + window.currentRoomId).push(encryptData(data));
         input.value = '';
     }
 }
@@ -486,10 +445,7 @@ function sendMessage() {
     const text = inp.value.trim();
     if(!text) return;
     const data = { author: currentUser, text: text, date: Date.now() };
-    const encrypted = encryptData(data);
-    if (encrypted) {
-        db.ref('chats/' + window.currentRoomId).push(encrypted);
-    }
+    db.ref('chats/' + window.currentRoomId).push(encryptData(data));
     inp.value = '';
 }
 function deleteMessage(key) {
@@ -578,7 +534,7 @@ async function updateCoverPhoto(input) {
 }
 
 /* ============================================== */
-/* FIXED: COMPLETELY FIXED CALL SYSTEM - NO LOOPS */
+/* FIXED CALL SYSTEM - SIMPLE AND RELIABLE */
 /* ============================================== */
 
 let localStream = null;
@@ -587,9 +543,6 @@ let currentCallId = null;
 let callEnded = false;
 let callStatusListener = null;
 let iceCandidateListeners = [];
-let isInCall = false;
-let currentCallType = null;
-let currentCallPartner = null;
 
 const iceServers = {
     iceServers: [
@@ -603,15 +556,8 @@ const iceServers = {
 async function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Please select a chat first", "fa-times-circle");
     
-    if (isInCall) {
-        showCustomAlert("You are already in a call", "fa-times-circle");
-        return;
-    }
-    
+    // Reset call ended flag
     callEnded = false;
-    isInCall = true;
-    currentCallType = type;
-    currentCallPartner = currentChatPartner;
     
     // Generate call ID
     currentCallId = currentChatIsGroup ? 
@@ -655,12 +601,12 @@ async function initiateCall(type) {
         
         // Set timeout for unanswered call
         setTimeout(() => {
-            if (currentCallId && !callEnded && isInCall) {
+            if (currentCallId && !callEnded) {
                 db.ref(`calls/${currentCallId}`).once('value').then(snapshot => {
                     const callData = snapshot.val();
                     if (callData && callData.status === 'ringing') {
                         showCallEndedNotification("No answer. Call ended.");
-                        endCallAction();
+                        cleanupCall();
                     }
                 });
             }
@@ -690,7 +636,7 @@ function listenForCalls() {
             isForMe = callData.callee === currentUser;
         }
         
-        if (isForMe && !isInCall) {
+        if (isForMe) {
             showCustomConfirm(
                 `${callData.caller} is ${callData.type === 'video' ? 'video' : 'audio'} calling. Answer?`,
                 () => answerCall(callId, callData),
@@ -698,33 +644,18 @@ function listenForCalls() {
             );
         }
     });
-    
-    // Listen for call updates
-    db.ref('calls').on('child_changed', (snapshot) => {
-        const callData = snapshot.val();
-        const callId = snapshot.key;
-        
-        if (callId === currentCallId && callData && !callEnded) {
-            // Check if other party ended the call
-            if (callData.callEnded && callData.endedBy !== currentUser) {
-                const endedBy = callData.endedBy || 'Other person';
-                showCallEndedNotification(`${endedBy} ended the call`);
-                cleanupCall();
-            }
-        }
-    });
 }
 
 function listenForCallStatus() {
-    if (!currentCallId || !isInCall) return;
+    if (!currentCallId) return;
     
     // Listen for answer
     callStatusListener = db.ref(`calls/${currentCallId}`).on('value', async (snapshot) => {
         const callData = snapshot.val();
-        if (!callData || callEnded || !isInCall) return;
+        if (!callData || callEnded) return;
         
         // Check if call was ended by other party
-        if (callData.callEnded && callData.endedBy !== currentUser && !callEnded) {
+        if (callData.callEnded && !callEnded) {
             const endedBy = callData.endedBy || 'Other person';
             showCallEndedNotification(`${endedBy} ended the call`);
             cleanupCall();
@@ -744,7 +675,7 @@ function listenForCallStatus() {
         if (callData.status === 'rejected' && !callEnded) {
             showCallEndedNotification("Call was rejected");
             cleanupCall();
-        } else if (callData.status === 'ended' && !callEnded && callData.endedBy !== currentUser) {
+        } else if (callData.status === 'ended' && !callEnded) {
             const endedBy = callData.endedBy || 'Other person';
             showCallEndedNotification(`${endedBy} ended the call`);
             cleanupCall();
@@ -753,18 +684,9 @@ function listenForCallStatus() {
 }
 
 async function answerCall(callId, callData) {
-    if (isInCall) {
-        showCustomAlert("You are already in a call", "fa-times-circle");
-        rejectCall(callId);
-        return;
-    }
-    
     try {
         currentCallId = callId;
         callEnded = false;
-        isInCall = true;
-        currentCallType = callData.type;
-        currentCallPartner = callData.caller;
         
         // Get user media
         localStream = await navigator.mediaDevices.getUserMedia({
@@ -773,10 +695,7 @@ async function answerCall(callId, callData) {
         });
         
         // Update call status
-        await db.ref(`calls/${callId}`).update({ 
-            status: 'answered',
-            answeredAt: Date.now()
-        });
+        await db.ref(`calls/${callId}`).update({ status: 'answered' });
         
         // Set up peer connection
         await setupPeerConnection('callee', callData.type);
@@ -835,7 +754,7 @@ async function setupPeerConnection(role, type) {
     
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
-        if (event.candidate && currentCallId && !callEnded && isInCall) {
+        if (event.candidate && currentCallId && !callEnded) {
             const candidatePath = role === 'caller' ? 
                 `calls/${currentCallId}/callerCandidates` : 
                 `calls/${currentCallId}/calleeCandidates`;
@@ -850,10 +769,10 @@ async function setupPeerConnection(role, type) {
             document.getElementById('video-status').innerText = 'Connected';
             document.getElementById('call-status-indicator').innerText = 'Connected';
         } else if ((peerConnection.connectionState === 'failed' || 
-                   peerConnection.connectionState === 'disconnected') && !callEnded && isInCall) {
+                   peerConnection.connectionState === 'disconnected') && !callEnded) {
             if (currentCallId) {
                 showCallEndedNotification("Call disconnected");
-                endCallAction();
+                cleanupCall();
             }
         }
     };
@@ -861,10 +780,10 @@ async function setupPeerConnection(role, type) {
     // Handle ICE connection state
     peerConnection.oniceconnectionstatechange = () => {
         if ((peerConnection.iceConnectionState === 'disconnected' || 
-            peerConnection.iceConnectionState === 'failed') && !callEnded && isInCall) {
+            peerConnection.iceConnectionState === 'failed') && !callEnded) {
             if (currentCallId) {
                 showCallEndedNotification("Call lost connection");
-                endCallAction();
+                cleanupCall();
             }
         }
     };
@@ -876,7 +795,7 @@ function listenForRemoteCandidates(callId, remoteRole) {
         `calls/${callId}/calleeCandidates`;
     
     const listener = db.ref(candidatePath).on('child_added', async (snapshot) => {
-        if (peerConnection && !callEnded && isInCall) {
+        if (peerConnection && !callEnded) {
             const candidate = JSON.parse(snapshot.val());
             try {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
@@ -893,8 +812,7 @@ function rejectCall(callId) {
     db.ref(`calls/${callId}`).update({ 
         status: 'rejected',
         endedBy: currentUser,
-        callEnded: true,
-        endTime: Date.now()
+        callEnded: true
     });
     setTimeout(() => {
         db.ref(`calls/${callId}`).remove();
@@ -902,23 +820,16 @@ function rejectCall(callId) {
 }
 
 function showCallEndedNotification(message) {
-    if (callEnded || !isInCall) return;
+    if (callEnded) return;
     
     callEnded = true;
     document.getElementById('call-ended-by').innerText = message;
     document.getElementById('call-ended-overlay').style.display = 'flex';
-    
-    // Auto-hide after 3 seconds and return to chat
-    setTimeout(() => {
-        hideCallEndedOverlay();
-    }, 3000);
 }
 
 function hideCallEndedOverlay() {
     document.getElementById('call-ended-overlay').style.display = 'none';
     cleanupCall();
-    // Return to messages view
-    switchView('messages');
 }
 
 function openVideoModal(mode, type) {
@@ -939,7 +850,7 @@ function openVideoModal(mode, type) {
 }
 
 function endCallAction() {
-    if (callEnded || !isInCall) return;
+    if (callEnded) return;
     
     callEnded = true;
     
@@ -953,11 +864,13 @@ function endCallAction() {
         });
     }
     
+    // Show call ended notification
     showCallEndedNotification("You ended the call");
     
+    // Clean up immediately
     setTimeout(() => {
         cleanupCall();
-    }, 1000);
+    }, 100);
 }
 
 function cleanupCall() {
@@ -998,20 +911,10 @@ function cleanupCall() {
     // Reset video elements
     document.getElementById('remoteVideo').srcObject = null;
     document.getElementById('localVideo').srcObject = null;
-    
-    // Reset call state
-    isInCall = false;
-    currentCallType = null;
-    currentCallPartner = null;
-    
-    // Return to messages view if we were in a call
-    if (document.getElementById('video-modal').style.display === 'flex') {
-        switchView('messages');
-    }
 }
 
 function toggleCam() {
-    if (!localStream || !isInCall) return;
+    if (!localStream) return;
     
     const videoTrack = localStream.getVideoTracks()[0];
     if (videoTrack) {
@@ -1031,7 +934,7 @@ function toggleCam() {
 }
 
 function toggleMic() {
-    if (!localStream || !isInCall) return;
+    if (!localStream) return;
     
     const audioTrack = localStream.getAudioTracks()[0];
     if (audioTrack) {
@@ -1051,24 +954,18 @@ function toggleMic() {
 }
 
 /* ============================================== */
-/* FIXED: LIVE STREAM SYSTEM */
+/* FIXED LIVE STREAM SYSTEM - NO GLITCHES */
 /* ============================================== */
 
 let liveStream = null;
 let liveStreamId = null;
 let liveViewers = 0;
 let liveChatListener = null;
-let isStreamingLive = false;
 
 async function startLiveStream() {
     showCustomPrompt("Enter live stream title:", async (title) => {
         if (!title || title.trim() === '') {
             showCustomAlert("Please enter a title for your live stream", "fa-times-circle");
-            return;
-        }
-        
-        if (isStreamingLive) {
-            showCustomAlert("You are already streaming live", "fa-times-circle");
             return;
         }
         
@@ -1104,13 +1001,7 @@ async function startLiveStream() {
                 comments: []
             };
             
-            const encryptedData = encryptData(liveData);
-            if (encryptedData) {
-                await postRef.set(encryptedData);
-            } else {
-                showCustomAlert("Error creating live stream", "fa-times-circle");
-                return;
-            }
+            await postRef.set(encryptData(liveData));
             
             // Create live stream room
             await db.ref(`livestreams/${liveStreamId}`).set({
@@ -1121,14 +1012,10 @@ async function startLiveStream() {
                 startTime: Date.now()
             });
             
-            isStreamingLive = true;
-            
             // Switch to live stream view
             switchView('live-stream');
             document.getElementById('live-stream-title').innerText = title;
-            const liveVideo = document.getElementById('live-stream-video');
-            liveVideo.srcObject = liveStream;
-            liveVideo.play().catch(e => console.log("Autoplay prevented:", e));
+            document.getElementById('live-stream-video').srcObject = liveStream;
             
             // Show live controls
             document.getElementById('live-controls-container').style.display = 'flex';
@@ -1138,13 +1025,11 @@ async function startLiveStream() {
             listenForLiveChat();
             
             // Update viewer count periodically
-            const viewerInterval = setInterval(() => {
-                if (liveStreamId && isStreamingLive) {
+            setInterval(() => {
+                if (liveStreamId) {
                     db.ref(`livestreams/${liveStreamId}/viewers`).transaction(current => {
-                        return (current || 0);
+                        return (current || 0) + 1;
                     });
-                } else {
-                    clearInterval(viewerInterval);
                 }
             }, 10000);
             
@@ -1156,7 +1041,7 @@ async function startLiveStream() {
 }
 
 function toggleLiveCam() {
-    if (!liveStream || !isStreamingLive) return;
+    if (!liveStream) return;
     
     const videoTrack = liveStream.getVideoTracks()[0];
     if (videoTrack) {
@@ -1176,7 +1061,7 @@ function toggleLiveCam() {
 }
 
 function toggleLiveMic() {
-    if (!liveStream || !isStreamingLive) return;
+    if (!liveStream) return;
     
     const audioTrack = liveStream.getAudioTracks()[0];
     if (audioTrack) {
@@ -1196,7 +1081,7 @@ function toggleLiveMic() {
 }
 
 function endLiveStream() {
-    if (liveStreamId && isStreamingLive) {
+    if (liveStreamId) {
         // Update stream status
         db.ref(`posts/${liveStreamId}`).update({
             streamStatus: 'ended',
@@ -1222,9 +1107,7 @@ function endLiveStream() {
         // Hide live controls
         document.getElementById('live-controls-container').style.display = 'none';
         
-        isStreamingLive = false;
-        
-        showCustomAlert("Live stream ended", "fa-check-circle");
+        // Switch back to feed
         switchView('feed');
     }
 }
@@ -1263,7 +1146,7 @@ function joinLiveStream(postId) {
 }
 
 function listenForLiveViewers() {
-    if (!liveStreamId || !isStreamingLive) return;
+    if (!liveStreamId) return;
     
     db.ref(`livestreams/${liveStreamId}/viewers`).on('value', (snap) => {
         const viewers = snap.val() || 0;
@@ -1276,8 +1159,7 @@ function listenForLiveViewers() {
             let post = decryptData(raw);
             if (post) {
                 post.viewers = viewers;
-                const encrypted = encryptData(post);
-                return encrypted || raw;
+                return encryptData(post);
             }
             return raw;
         });
@@ -1356,18 +1238,15 @@ function loadLiveStreams() {
 }
 
 /* ============================================== */
-/* FIXED: MARKETPLACE SYSTEM - ITEMS NOW SHOW UP */
+/* FIXED MARKETPLACE SYSTEM - ITEMS SHOW UP */
 /* ============================================== */
 
 function createListing() {
     showCustomPrompt("Enter item title:", (title) => {
-        if (!title || title.trim() === '') {
-            showCustomAlert("Please enter an item title", "fa-times-circle");
-            return;
-        }
+        if (!title || title.trim() === '') return;
         
         showCustomPrompt("Enter price ($):", (price) => {
-            if (!price || isNaN(parseFloat(price)) || parseFloat(price) <= 0) {
+            if (!price || isNaN(price)) {
                 showCustomAlert("Please enter a valid price", "fa-times-circle");
                 return;
             }
@@ -1392,81 +1271,45 @@ function createListing() {
                         images: []
                     };
                     
-                    const encryptedData = encryptData(listingData);
-                    if (encryptedData) {
-                        db.ref(`marketplace/${listingId}`).set(encryptedData)
-                            .then(() => {
-                                showCustomAlert("Item listed successfully!", "fa-check-circle");
-                                loadMarketplace(); // Reload marketplace to show new item
-                            })
-                            .catch(error => {
-                                console.error("Error listing item:", error);
-                                showCustomAlert("Failed to list item", "fa-times-circle");
-                            });
-                    } else {
-                        showCustomAlert("Error creating listing", "fa-times-circle");
-                    }
-                }, "");
-            }, "");
-        }, "");
-    }, "");
+                    db.ref(`marketplace/${listingId}`).set(encryptData(listingData));
+                    showCustomAlert("Item listed successfully!", "fa-check-circle");
+                    loadMarketplace();
+                });
+            });
+        });
+    });
 }
 
 function loadMarketplace() {
     const container = document.getElementById('marketplace-grid');
-    container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-gray);">Loading marketplace items...</div>';
+    container.innerHTML = '';
     
     db.ref('marketplace').on('value', (snap) => {
         container.innerHTML = '';
-        
-        if (!snap.exists() || snap.numChildren() === 0) {
-            container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-gray);">No items available yet. Be the first to list something!</div>';
-            return;
-        }
-        
-        const items = [];
         snap.forEach(c => {
             const listing = decryptData(c.val());
             if (listing && listing.status === 'available') {
-                items.push(listing);
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'marketplace-item';
+                itemDiv.onclick = () => viewListing(listing.id);
+                itemDiv.innerHTML = `
+                    <div style="height: 150px; background: #e2e8f0; display: flex; align-items: center; justify-content: center; color: var(--text-gray);">
+                        <i class="fas fa-image" style="font-size: 2rem;"></i>
+                    </div>
+                    <div class="marketplace-item-content">
+                        <div style="font-weight: bold; margin-bottom: 5px;">${listing.title}</div>
+                        <div class="marketplace-price">$${listing.price}</div>
+                        <div class="marketplace-location">
+                            <i class="fas fa-map-marker-alt"></i> ${listing.location}
+                        </div>
+                        <div style="font-size: 0.9rem; color: var(--text-gray); margin-top: 10px;">
+                            By ${listing.seller}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(itemDiv);
             }
         });
-        
-        if (items.length === 0) {
-            container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-gray);">No active listings available.</div>';
-            return;
-        }
-        
-        // Sort by date (newest first)
-        items.sort((a, b) => b.date - a.date);
-        
-        items.forEach(listing => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'marketplace-item';
-            itemDiv.onclick = () => viewListing(listing.id);
-            itemDiv.innerHTML = `
-                <div style="height: 150px; background: #e2e8f0; display: flex; align-items: center; justify-content: center; color: var(--text-gray);">
-                    <i class="fas fa-image" style="font-size: 2rem;"></i>
-                </div>
-                <div class="marketplace-item-content">
-                    <div style="font-weight: bold; margin-bottom: 5px; font-size: 1.1rem;">${listing.title}</div>
-                    <div class="marketplace-price">$${listing.price.toFixed(2)}</div>
-                    <div class="marketplace-location">
-                        <i class="fas fa-map-marker-alt"></i> ${listing.location}
-                    </div>
-                    <div style="font-size: 0.9rem; color: var(--text-gray); margin-top: 10px; line-height: 1.4;">
-                        ${listing.description.substring(0, 80)}${listing.description.length > 80 ? '...' : ''}
-                    </div>
-                    <div style="font-size: 0.8rem; color: var(--text-gray); margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.05);">
-                        <i class="fas fa-user"></i> ${listing.seller}
-                    </div>
-                </div>
-            `;
-            container.appendChild(itemDiv);
-        });
-    }, (error) => {
-        console.error("Error loading marketplace:", error);
-        container.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-gray);">Error loading marketplace items.</div>';
     });
 }
 
@@ -1497,17 +1340,12 @@ function createBusinessPage() {
                     posts: []
                 };
                 
-                const encryptedData = encryptData(pageData);
-                if (encryptedData) {
-                    db.ref(`pages/${pageId}`).set(encryptedData);
-                    showCustomAlert("Page created successfully!", "fa-check-circle");
-                    openBusinessPage(pageId);
-                } else {
-                    showCustomAlert("Error creating page", "fa-times-circle");
-                }
-            }, "");
-        }, "");
-    }, "");
+                db.ref(`pages/${pageId}`).set(encryptData(pageData));
+                showCustomAlert("Page created successfully!", "fa-check-circle");
+                openBusinessPage(pageId);
+            });
+        });
+    });
 }
 
 function loadPages() {
@@ -1572,8 +1410,7 @@ function likePage() {
         let page = decryptData(raw);
         if (page) {
             page.likes = (page.likes || 0) + 1;
-            const encrypted = encryptData(page);
-            return encrypted || raw;
+            return encryptData(page);
         }
         return raw;
     });
@@ -1590,8 +1427,7 @@ function followPage() {
             if (!page.followers.includes(currentUser)) {
                 page.followers.push(currentUser);
             }
-            const encrypted = encryptData(page);
-            return encrypted || raw;
+            return encryptData(page);
         }
         return raw;
     });
@@ -1679,7 +1515,4 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // Hide live controls by default
     document.getElementById('live-controls-container').style.display = 'none';
-    
-    // Initialize marketplace on page load
-    loadMarketplace();
 });
