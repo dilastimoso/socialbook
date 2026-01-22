@@ -471,15 +471,26 @@ async function updateCoverPhoto(input) {
     }
 }
 
-/* --- FIXED WEB-RTC CALLS (WORKING IN PRIVATE MESSAGES) --- */
-let localStream, pc;
-const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const candidateQueue = [];
+/* --- COMPLETELY FIXED WEBRTC CALLING SYSTEM --- */
+let localStream = null;
+let pc = null;
+const rtcConfig = { 
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+    ] 
+};
+let candidateQueue = [];
+let answerListener = null;
+let offerListener = null;
+let iceAnswerListener = null;
+let iceOfferListener = null;
 
 function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Select a chat first");
     
-    // Generate call ID based on chat type
+    // Generate call ID
     let callId;
     if (currentChatIsGroup) {
         callId = currentChatPartner;
@@ -487,14 +498,8 @@ function initiateCall(type) {
         callId = [currentUser, currentChatPartner].sort().join('_');
     }
     
-    db.ref(`calls/${callId}`).set({ 
-        caller: currentUser, 
-        type: type, 
-        status: 'ringing', 
-        timestamp: Date.now(),
-        participants: currentChatIsGroup ? 'group' : [currentUser, currentChatPartner],
-        isGroup: currentChatIsGroup
-    });
+    // Clean up any existing call data
+    db.ref(`calls/${callId}`).remove();
     
     activeCall = { 
         id: callId, 
@@ -504,16 +509,47 @@ function initiateCall(type) {
         isGroup: currentChatIsGroup
     };
     
+    // Set up the call with a timeout
+    db.ref(`calls/${callId}`).set({ 
+        caller: currentUser, 
+        type: type, 
+        status: 'ringing', 
+        timestamp: Date.now(),
+        participants: currentChatIsGroup ? 'group' : [currentUser, currentChatPartner],
+        isGroup: currentChatIsGroup
+    });
+    
     openVideoModal('calling', type);
     
+    // Listen for answer with a timeout
+    const timeout = setTimeout(() => {
+        if (activeCall && activeCall.status !== 'accepted') {
+            showCustomAlert("No answer. Call ended.", "fa-times-circle");
+            endCallAction();
+        }
+    }, 30000); // 30 second timeout
+    
     db.ref(`calls/${callId}/status`).on('value', s => {
-        if(s.val() === 'accepted') startWebRTC(true);
-        if(s.val() === 'rejected') endCallAction();
+        if(!s.val()) return;
+        
+        if(s.val() === 'accepted') {
+            clearTimeout(timeout);
+            activeCall.status = 'accepted';
+            startWebRTC(true);
+        } else if(s.val() === 'rejected') {
+            clearTimeout(timeout);
+            showCustomAlert("Call rejected", "fa-times-circle");
+            endCallAction();
+        } else if(s.val() === 'ended') {
+            clearTimeout(timeout);
+            showCustomAlert("Call ended", "fa-times-circle");
+            endCallAction();
+        }
     });
 }
 
 function listenForCalls() {
-    db.ref('calls').on('child_added', snap => {
+    db.ref('calls').on('child_added', async snap => {
         const val = snap.val();
         if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
         
@@ -521,14 +557,9 @@ function listenForCalls() {
         let shouldAnswer = false;
         
         if (val.isGroup) {
-            // For group calls, check if I'm a member of this group
-            db.ref(`users/${currentUser}/groups/${snap.key}`).once('value', groupSnap => {
-                if (groupSnap.exists()) {
-                    shouldAnswer = true;
-                }
-            });
+            const groupSnap = await db.ref(`users/${currentUser}/groups/${snap.key}`).once('value');
+            shouldAnswer = groupSnap.exists();
         } else {
-            // For 1-on-1 calls, check if my username is in participants
             shouldAnswer = val.participants && val.participants.includes(currentUser);
         }
         
@@ -538,11 +569,17 @@ function listenForCalls() {
                     id: snap.key, 
                     type: val.type, 
                     role: 'guest',
+                    status: 'accepted',
                     isGroup: val.isGroup
                 };
+                
+                // Update call status to accepted
                 db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
                 openVideoModal('answer', val.type);
                 startWebRTC(false);
+            }, () => {
+                // User rejected the call
+                db.ref(`calls/${snap.key}`).update({ status: 'rejected' });
             });
         }
     });
@@ -554,6 +591,7 @@ function startLiveBroadcast(postId) {
     openVideoModal('live', 'video');
     startWebRTC(true, true);
 }
+
 function joinLiveStream(postId) {
     activeCall = { id: postId, type: 'live', role: 'guest' };
     openVideoModal('watch', 'video');
@@ -562,83 +600,195 @@ function joinLiveStream(postId) {
 
 async function startWebRTC(isOfferer, isLive=false) {
     if(!activeCall) return;
-    const { id, type } = activeCall;
     
-    // Get media FIRST before creating PC
-    if (activeCall.role === 'host' || !isLive) {
-        try {
-            localStream = await navigator.mediaDevices.getUserMedia({ 
-                video: type==='video' || type==='live', 
-                audio: true 
-            });
-            document.getElementById('localVideo').srcObject = localStream;
-        } catch(e) { 
-            console.log("Media Error:", e);
-            showCustomAlert("Could not access camera/microphone", "fa-times-circle");
-            endCallAction();
-            return;
-        }
-    }
-
-    pc = new RTCPeerConnection(rtcConfig);
+    const callId = activeCall.id;
+    const type = activeCall.type;
+    const basePath = isLive ? `livestreams/${callId}` : `calls/${callId}`;
     
-    if(localStream) {
-        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    }
-    
-    pc.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
-    
-    // Path differentiation for calls vs live
-    const basePath = isLive ? `livestreams/${id}` : `calls/${id}`;
-
-    pc.onicecandidate = e => {
-        if(e.candidate) db.ref(`${basePath}/${isOfferer?'offer_ice':'answer_ice'}`).push(JSON.stringify(e.candidate));
-    };
-
-    if(isOfferer) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        db.ref(`${basePath}/offer`).set(JSON.stringify(offer));
+    try {
+        // Clean up any existing listeners
+        cleanupWebRTCListeners();
         
-        db.ref(`${basePath}/answer`).on('value', async s => {
-            if(s.val() && !pc.currentRemoteDescription) {
-                await pc.setRemoteDescription(JSON.parse(s.val()));
-                processCandidateQueue();
+        // Get user media
+        localStream = await navigator.mediaDevices.getUserMedia({ 
+            video: type === 'video' || type === 'live', 
+            audio: true 
+        });
+        
+        document.getElementById('localVideo').srcObject = localStream;
+        document.getElementById('video-status').innerText = isOfferer ? 'Calling...' : 'Connecting...';
+        
+        // Create new peer connection
+        pc = new RTCPeerConnection(rtcConfig);
+        
+        // Add local tracks
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+        });
+        
+        // Handle incoming remote stream
+        pc.ontrack = (event) => {
+            console.log("Received remote track");
+            if (event.streams && event.streams[0]) {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+                document.getElementById('video-status').innerText = 'Connected';
+            }
+        };
+        
+        // Handle ICE candidates
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                const candidatePath = isOfferer ? `${basePath}/offerCandidates` : `${basePath}/answerCandidates`;
+                db.ref(candidatePath).push(JSON.stringify(event.candidate.toJSON()));
+            }
+        };
+        
+        // Handle connection state changes
+        pc.onconnectionstatechange = () => {
+            console.log("Connection state:", pc.connectionState);
+            if (pc.connectionState === 'connected') {
+                document.getElementById('video-status').innerText = 'Connected';
+            } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                showCustomAlert("Call failed to connect", "fa-times-circle");
+                endCallAction();
+            }
+        };
+        
+        // Handle ICE connection state
+        pc.oniceconnectionstatechange = () => {
+            console.log("ICE connection state:", pc.iceConnectionState);
+            if (pc.iceConnectionState === 'failed') {
+                showCustomAlert("Connection failed", "fa-times-circle");
+                endCallAction();
+            }
+        };
+        
+        if (isOfferer) {
+            // Create offer
+            const offerDescription = await pc.createOffer();
+            await pc.setLocalDescription(offerDescription);
+            
+            // Send offer to Firebase
+            await db.ref(`${basePath}/offer`).set(JSON.stringify(offerDescription));
+            
+            // Listen for answer
+            answerListener = db.ref(`${basePath}/answer`).on('value', async (snapshot) => {
+                if (!snapshot.exists() || !pc.currentRemoteDescription) {
+                    const answerDescription = snapshot.val();
+                    if (answerDescription) {
+                        try {
+                            await pc.setRemoteDescription(JSON.parse(answerDescription));
+                        } catch (error) {
+                            console.error("Error setting remote description:", error);
+                        }
+                    }
+                }
+            });
+            
+            // Listen for answer ICE candidates
+            iceAnswerListener = db.ref(`${basePath}/answerCandidates`).on('child_added', async (snapshot) => {
+                const candidate = JSON.parse(snapshot.val());
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (error) {
+                    console.error("Error adding ICE candidate:", error);
+                }
+            });
+            
+        } else {
+            // Listen for offer
+            offerListener = db.ref(`${basePath}/offer`).on('value', async (snapshot) => {
+                if (snapshot.exists() && !pc.currentRemoteDescription) {
+                    const offerDescription = snapshot.val();
+                    if (offerDescription) {
+                        try {
+                            await pc.setRemoteDescription(JSON.parse(offerDescription));
+                            
+                            // Create answer
+                            const answerDescription = await pc.createAnswer();
+                            await pc.setLocalDescription(answerDescription);
+                            
+                            // Send answer to Firebase
+                            await db.ref(`${basePath}/answer`).set(JSON.stringify(answerDescription));
+                        } catch (error) {
+                            console.error("Error setting remote description:", error);
+                        }
+                    }
+                }
+            });
+            
+            // Listen for offer ICE candidates
+            iceOfferListener = db.ref(`${basePath}/offerCandidates`).on('child_added', async (snapshot) => {
+                const candidate = JSON.parse(snapshot.val());
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (error) {
+                    console.error("Error adding ICE candidate:", error);
+                }
+            });
+        }
+        
+        // Listen for remote ICE candidates from the other side
+        const remoteCandidatePath = isOfferer ? `${basePath}/answerCandidates` : `${basePath}/offerCandidates`;
+        const remoteCandidateListener = db.ref(remoteCandidatePath).on('child_added', async (snapshot) => {
+            const candidate = JSON.parse(snapshot.val());
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error("Error adding remote ICE candidate:", error);
             }
         });
-    } else {
-        const offerSnap = await db.ref(`${basePath}/offer`).once('value');
-        if(offerSnap.exists()){
-            await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
-            processCandidateQueue();
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            db.ref(`${basePath}/answer`).set(JSON.stringify(answer));
-        }
+        
+    } catch (error) {
+        console.error("WebRTC error:", error);
+        showCustomAlert("Failed to start call: " + error.message, "fa-times-circle");
+        endCallAction();
     }
-    
-    db.ref(`${basePath}/${!isOfferer?'offer_ice':'answer_ice'}`).on('child_added', s => {
-        const candidate = JSON.parse(s.val());
-        if(pc.remoteDescription) {
-            pc.addIceCandidate(candidate);
-        } else {
-            candidateQueue.push(candidate);
-        }
-    });
 }
 
-function processCandidateQueue() {
-    while(candidateQueue.length > 0) {
-        pc.addIceCandidate(candidateQueue.shift());
+function cleanupWebRTCListeners() {
+    // Remove all Firebase listeners
+    if (answerListener) {
+        answerListener.off();
+        answerListener = null;
     }
+    if (offerListener) {
+        offerListener.off();
+        offerListener = null;
+    }
+    if (iceAnswerListener) {
+        iceAnswerListener.off();
+        iceAnswerListener = null;
+    }
+    if (iceOfferListener) {
+        iceOfferListener.off();
+        iceOfferListener = null;
+    }
+    
+    // Clear candidate queue
+    candidateQueue = [];
 }
 
 function openVideoModal(mode, type) {
     document.getElementById('video-modal').style.display = 'flex';
     document.getElementById('call-type-label').innerText = type === 'live' ? 'Live Stream' : (type === 'video' ? 'Video Call' : 'Audio Call');
-    document.getElementById('video-status').innerText = mode === 'calling' ? 'Calling...' : 'Connected';
     
-    // Hide local video if audio only or if guest watching live
+    // Reset video elements
+    document.getElementById('remoteVideo').srcObject = null;
+    document.getElementById('localVideo').srcObject = null;
+    
+    // Set status message
+    let statusMsg = '';
+    switch(mode) {
+        case 'calling': statusMsg = 'Calling...'; break;
+        case 'answer': statusMsg = 'Connecting...'; break;
+        case 'live': statusMsg = 'Starting live stream...'; break;
+        case 'watch': statusMsg = 'Joining live stream...'; break;
+        default: statusMsg = 'Connecting...';
+    }
+    document.getElementById('video-status').innerText = statusMsg;
+    
+    // Show/hide local video based on call type
     if(type === 'audio' || (activeCall && activeCall.type === 'live' && activeCall.role === 'guest')) {
         document.getElementById('localVideo').style.display = 'none';
     } else {
@@ -647,17 +797,11 @@ function openVideoModal(mode, type) {
 }
 
 function endCallAction() {
-    if(activeCall) {
-        const basePath = activeCall.type === 'live' ? `livestreams/${activeCall.id}` : `calls/${activeCall.id}`;
-        if(activeCall.role === 'host') db.ref(basePath).remove();
-        if(activeCall.type === 'live' && activeCall.role === 'host') {
-            db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'});
-        }
-    }
-    document.getElementById('video-modal').style.display = 'none';
+    // Clean up WebRTC
+    cleanupWebRTCListeners();
     
-    // Stop media tracks properly
-    if(localStream) {
+    // Stop media tracks
+    if (localStream) {
         localStream.getTracks().forEach(track => {
             track.stop();
         });
@@ -665,32 +809,56 @@ function endCallAction() {
     }
     
     // Close peer connection
-    if(pc) {
+    if (pc) {
         pc.close();
         pc = null;
     }
     
-    // Clear candidate queue
-    candidateQueue.length = 0;
+    // Update call status in Firebase if we have an active call
+    if (activeCall) {
+        const basePath = activeCall.type === 'live' ? `livestreams/${activeCall.id}` : `calls/${activeCall.id}`;
+        
+        // Only host should remove the call data
+        if (activeCall.role === 'host') {
+            db.ref(basePath).remove();
+        } else {
+            // Guest just sets status to ended
+            db.ref(`${basePath}/status`).set('ended');
+        }
+        
+        // Update live stream status if needed
+        if (activeCall.type === 'live' && activeCall.role === 'host') {
+            db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'});
+        }
+    }
     
+    // Hide video modal
+    document.getElementById('video-modal').style.display = 'none';
+    
+    // Reset active call
     activeCall = null;
+    
+    // Reset video elements
+    document.getElementById('remoteVideo').srcObject = null;
+    document.getElementById('localVideo').srcObject = null;
 }
 
 /* --- CONTROLS --- */
 function toggleCam() {
     if(localStream) {
-        const t = localStream.getVideoTracks()[0];
-        if(t) {
-            t.enabled = !t.enabled;
+        const videoTrack = localStream.getVideoTracks()[0];
+        if(videoTrack) {
+            videoTrack.enabled = !videoTrack.enabled;
             document.getElementById('btn-cam').classList.toggle('active');
         }
     }
 }
+
 function toggleMic() {
     if(localStream) {
-        const t = localStream.getAudioTracks()[0];
-        if(t) {
-            t.enabled = !t.enabled;
+        const audioTrack = localStream.getAudioTracks()[0];
+        if(audioTrack) {
+            audioTrack.enabled = !audioTrack.enabled;
             document.getElementById('btn-mic').classList.toggle('active');
         }
     }
