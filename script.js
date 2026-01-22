@@ -126,7 +126,6 @@ auth.onAuthStateChanged(user => {
         updateHeaderUser();
         loadFeed();
         listenForCalls();
-        listenForCallEnd();
     } else {
         modal.style.display = 'flex';
         modal.classList.add('animate-enter');
@@ -534,13 +533,15 @@ async function updateCoverPhoto(input) {
     }
 }
 
-/* --- COMPLETELY FIXED WEBRTC CALLING SYSTEM WITH CALL END NOTIFICATIONS --- */
+/* ============================================== */
+/* FIXED: COMPLETELY FIXED CALL SYSTEM - NO LOOPS */
+/* ============================================== */
+
 let localStream = null;
 let peerConnection = null;
 let currentCallId = null;
+let callEnded = false; // NEW: Track if call has already ended
 let callStatusListener = null;
-let offerListener = null;
-let answerListener = null;
 let iceCandidateListeners = [];
 
 const iceServers = {
@@ -548,13 +549,15 @@ const iceServers = {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
+        { urls: 'stun:stun3.l.google.com:19302' }
     ]
 };
 
 async function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Please select a chat first", "fa-times-circle");
+    
+    // Reset call ended flag
+    callEnded = false;
     
     // Generate call ID
     currentCallId = currentChatIsGroup ? 
@@ -584,10 +587,11 @@ async function initiateCall(type) {
             offer: JSON.stringify(offer),
             timestamp: Date.now(),
             isGroup: currentChatIsGroup,
-            endedBy: null
+            endedBy: null,
+            callEnded: false // NEW: Track if call ended
         });
         
-        // Listen for answer and call end
+        // Listen for answer
         listenForCallStatus();
         
         // Open call interface
@@ -597,17 +601,16 @@ async function initiateCall(type) {
         
         // Set timeout for unanswered call
         setTimeout(() => {
-            if (currentCallId) {
-                const callRef = db.ref(`calls/${currentCallId}`);
-                callRef.once('value').then(snapshot => {
+            if (currentCallId && !callEnded) {
+                db.ref(`calls/${currentCallId}`).once('value').then(snapshot => {
                     const callData = snapshot.val();
                     if (callData && callData.status === 'ringing') {
-                        showCustomAlert("No answer. Call ended.", "fa-times-circle");
-                        endCallAction();
+                        showCallEndedNotification("No answer. Call ended.");
+                        cleanupCall();
                     }
                 });
             }
-        }, 45000); // 45 seconds
+        }, 45000);
         
     } catch (error) {
         console.error("Call initiation failed:", error);
@@ -622,7 +625,7 @@ function listenForCalls() {
         const callId = snapshot.key;
         
         // Ignore if not for current user or already answered/ended
-        if (!callData || callData.status !== 'ringing' || callData.caller === currentUser) return;
+        if (!callData || callData.status !== 'ringing' || callData.caller === currentUser || callData.callEnded) return;
         
         // Check if this call is for me
         let isForMe = false;
@@ -643,55 +646,39 @@ function listenForCalls() {
     });
 }
 
-function listenForCallEnd() {
-    // Listen for call end notifications
-    db.ref('calls').on('child_changed', (snapshot) => {
-        const callData = snapshot.val();
-        const callId = snapshot.key;
-        
-        if (!callData || callId !== currentCallId) return;
-        
-        if (callData.status === 'ended') {
-            // Show call ended notification
-            const endedBy = callData.endedBy || 'Other person';
-            showCustomAlert(`${endedBy} ended the call`, "fa-phone-slash");
-            endCallAction();
-        }
-    });
-}
-
 function listenForCallStatus() {
     if (!currentCallId) return;
     
     // Listen for answer
-    answerListener = db.ref(`calls/${currentCallId}/answer`).on('value', async (snapshot) => {
-        if (snapshot.exists() && peerConnection) {
-            const answer = JSON.parse(snapshot.val());
-            if (!peerConnection.remoteDescription) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                listenForRemoteCandidates(currentCallId, 'callee');
-                document.getElementById('video-status').innerText = 'Connected';
-                document.getElementById('call-status-indicator').innerText = 'Connected';
-            }
+    callStatusListener = db.ref(`calls/${currentCallId}`).on('value', async (snapshot) => {
+        const callData = snapshot.val();
+        if (!callData || callEnded) return; // NEW: Don't process if call already ended
+        
+        // Check if call was ended by other party
+        if (callData.callEnded && !callEnded) {
+            const endedBy = callData.endedBy || 'Other person';
+            showCallEndedNotification(`${endedBy} ended the call`);
+            cleanupCall();
+            return;
         }
-    });
-    
-    // Listen for call status changes
-    callStatusListener = db.ref(`calls/${currentCallId}/status`).on('value', (snapshot) => {
-        if (snapshot.exists() && currentCallId) {
-            const status = snapshot.val();
-            if (status === 'rejected') {
-                showCustomAlert("Call was rejected", "fa-times-circle");
-                endCallAction();
-            } else if (status === 'ended') {
-                const callRef = db.ref(`calls/${currentCallId}`);
-                callRef.once('value').then(callSnap => {
-                    const callData = callSnap.val();
-                    const endedBy = callData?.endedBy || 'Other person';
-                    showCustomAlert(`${endedBy} ended the call`, "fa-phone-slash");
-                    endCallAction();
-                });
-            }
+        
+        // Handle answer
+        if (callData.answer && peerConnection && !peerConnection.remoteDescription) {
+            const answer = JSON.parse(callData.answer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            listenForRemoteCandidates(currentCallId, 'callee');
+            document.getElementById('video-status').innerText = 'Connected';
+            document.getElementById('call-status-indicator').innerText = 'Connected';
+        }
+        
+        // Handle status changes
+        if (callData.status === 'rejected' && !callEnded) {
+            showCallEndedNotification("Call was rejected");
+            cleanupCall();
+        } else if (callData.status === 'ended' && !callEnded) {
+            const endedBy = callData.endedBy || 'Other person';
+            showCallEndedNotification(`${endedBy} ended the call`);
+            cleanupCall();
         }
     });
 }
@@ -699,6 +686,7 @@ function listenForCallStatus() {
 async function answerCall(callId, callData) {
     try {
         currentCallId = callId;
+        callEnded = false; // Reset call ended flag
         
         // Get user media
         localStream = await navigator.mediaDevices.getUserMedia({
@@ -730,7 +718,7 @@ async function answerCall(callId, callData) {
         // Listen for ICE candidates from caller
         listenForRemoteCandidates(callId, 'caller');
         
-        // Listen for call end
+        // Listen for call status
         listenForCallStatus();
         
     } catch (error) {
@@ -766,7 +754,7 @@ async function setupPeerConnection(role, type) {
     
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
-        if (event.candidate && currentCallId) {
+        if (event.candidate && currentCallId && !callEnded) {
             const candidatePath = role === 'caller' ? 
                 `calls/${currentCallId}/callerCandidates` : 
                 `calls/${currentCallId}/calleeCandidates`;
@@ -780,22 +768,22 @@ async function setupPeerConnection(role, type) {
         if (peerConnection.connectionState === 'connected') {
             document.getElementById('video-status').innerText = 'Connected';
             document.getElementById('call-status-indicator').innerText = 'Connected';
-        } else if (peerConnection.connectionState === 'failed' || 
-                  peerConnection.connectionState === 'disconnected') {
+        } else if ((peerConnection.connectionState === 'failed' || 
+                   peerConnection.connectionState === 'disconnected') && !callEnded) {
             if (currentCallId) {
-                showCustomAlert("Call disconnected", "fa-phone-slash");
-                endCallAction();
+                showCallEndedNotification("Call disconnected");
+                cleanupCall();
             }
         }
     };
     
     // Handle ICE connection state
     peerConnection.oniceconnectionstatechange = () => {
-        if (peerConnection.iceConnectionState === 'disconnected' || 
-            peerConnection.iceConnectionState === 'failed') {
+        if ((peerConnection.iceConnectionState === 'disconnected' || 
+            peerConnection.iceConnectionState === 'failed') && !callEnded) {
             if (currentCallId) {
-                showCustomAlert("Call lost connection", "fa-phone-slash");
-                endCallAction();
+                showCallEndedNotification("Call lost connection");
+                cleanupCall();
             }
         }
     };
@@ -807,7 +795,7 @@ function listenForRemoteCandidates(callId, remoteRole) {
         `calls/${callId}/calleeCandidates`;
     
     const listener = db.ref(candidatePath).on('child_added', async (snapshot) => {
-        if (peerConnection) {
+        if (peerConnection && !callEnded) {
             const candidate = JSON.parse(snapshot.val());
             try {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
@@ -823,11 +811,27 @@ function listenForRemoteCandidates(callId, remoteRole) {
 function rejectCall(callId) {
     db.ref(`calls/${callId}`).update({ 
         status: 'rejected',
-        endedBy: currentUser
+        endedBy: currentUser,
+        callEnded: true
     });
     setTimeout(() => {
         db.ref(`calls/${callId}`).remove();
-    }, 5000);
+    }, 3000);
+}
+
+// FIXED: Show call ended notification without loops
+function showCallEndedNotification(message) {
+    if (callEnded) return; // Don't show if already ended
+    
+    callEnded = true;
+    document.getElementById('call-ended-by').innerText = message;
+    document.getElementById('call-ended-overlay').style.display = 'flex';
+}
+
+// FIXED: Hide call ended overlay
+function hideCallEndedOverlay() {
+    document.getElementById('call-ended-overlay').style.display = 'none';
+    cleanupCall();
 }
 
 function openVideoModal(mode, type) {
@@ -849,28 +853,37 @@ function openVideoModal(mode, type) {
     }
 }
 
+// FIXED: End call action - properly prevents loops
 function endCallAction() {
+    if (callEnded) return; // Don't process if already ended
+    
+    callEnded = true;
+    
     // Mark call as ended in Firebase
     if (currentCallId) {
         db.ref(`calls/${currentCallId}`).update({
             status: 'ended',
             endedBy: currentUser,
+            callEnded: true,
             endTime: Date.now()
         });
     }
     
+    // Show call ended notification
+    showCallEndedNotification("You ended the call");
+    
+    // Clean up after a delay
+    setTimeout(() => {
+        cleanupCall();
+    }, 1000);
+}
+
+// FIXED: Cleanup call properly
+function cleanupCall() {
     // Clean up Firebase listeners
     if (callStatusListener) {
         callStatusListener.off();
         callStatusListener = null;
-    }
-    if (offerListener) {
-        offerListener.off();
-        offerListener = null;
-    }
-    if (answerListener) {
-        answerListener.off();
-        answerListener = null;
     }
     
     iceCandidateListeners.forEach(item => {
@@ -894,12 +907,9 @@ function endCallAction() {
     if (currentCallId) {
         setTimeout(() => {
             db.ref(`calls/${currentCallId}`).remove();
-        }, 5000);
+        }, 3000);
+        currentCallId = null;
     }
-    
-    // Reset variables
-    currentCallId = null;
-    activeCall = null;
     
     // Hide video modal
     document.getElementById('video-modal').style.display = 'none';
@@ -909,25 +919,11 @@ function endCallAction() {
     document.getElementById('localVideo').srcObject = null;
 }
 
-function cleanupCall() {
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-    }
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-    if (currentCallId) {
-        db.ref(`calls/${currentCallId}`).remove();
-        currentCallId = null;
-    }
-    activeCall = null;
-}
+/* ============================================== */
+/* FIXED: LIVE STREAM CONTROLS - MIC/CAM TOGGLES */
+/* ============================================== */
 
-/* --- LIVE STREAM SYSTEM (Facebook Live Style) --- */
 let liveStream = null;
-let livePeerConnection = null;
 let liveStreamId = null;
 let liveViewers = 0;
 let liveChatListener = null;
@@ -940,10 +936,18 @@ async function startLiveStream() {
         }
         
         try {
-            // Get user media for live stream
+            // Get user media for live stream with device compatibility
             liveStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
+                video: {
+                    facingMode: 'user',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
             });
             
             // Create live stream post
@@ -979,6 +983,9 @@ async function startLiveStream() {
             document.getElementById('live-stream-title').innerText = title;
             document.getElementById('live-stream-video').srcObject = liveStream;
             
+            // Show live controls
+            document.getElementById('live-controls-container').style.display = 'flex';
+            
             // Listen for viewers and chat
             listenForLiveViewers();
             listenForLiveChat();
@@ -990,13 +997,90 @@ async function startLiveStream() {
                         return (current || 0) + 1;
                     });
                 }
-            }, 10000); // Update every 10 seconds
+            }, 10000);
             
         } catch (error) {
             console.error("Live stream failed:", error);
             showCustomAlert("Failed to start live stream: " + error.message, "fa-times-circle");
         }
     });
+}
+
+// FIXED: Live stream camera toggle with device compatibility
+function toggleLiveCam() {
+    if (!liveStream) return;
+    
+    const videoTrack = liveStream.getVideoTracks()[0];
+    if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        const btn = document.getElementById('live-btn-cam');
+        btn.classList.toggle('active');
+        btn.innerHTML = videoTrack.enabled ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash"></i>';
+        
+        // Update UI immediately
+        if (videoTrack.enabled) {
+            btn.style.background = 'white';
+            btn.style.color = 'var(--accent-color)';
+        } else {
+            btn.style.background = 'rgba(255,255,255,0.2)';
+            btn.style.color = 'white';
+        }
+    }
+}
+
+// FIXED: Live stream microphone toggle with device compatibility
+function toggleLiveMic() {
+    if (!liveStream) return;
+    
+    const audioTrack = liveStream.getAudioTracks()[0];
+    if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        const btn = document.getElementById('live-btn-mic');
+        btn.classList.toggle('active');
+        btn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+        
+        // Update UI immediately
+        if (audioTrack.enabled) {
+            btn.style.background = 'white';
+            btn.style.color = 'var(--accent-color)';
+        } else {
+            btn.style.background = 'rgba(255,255,255,0.2)';
+            btn.style.color = 'white';
+        }
+    }
+}
+
+// FIXED: End live stream
+function endLiveStream() {
+    if (liveStreamId) {
+        // Update stream status
+        db.ref(`posts/${liveStreamId}`).update({
+            streamStatus: 'ended',
+            endTime: Date.now()
+        });
+        
+        db.ref(`livestreams/${liveStreamId}`).update({
+            status: 'ended',
+            endTime: Date.now()
+        });
+        
+        // Clean up
+        if (liveStream) {
+            liveStream.getTracks().forEach(track => track.stop());
+            liveStream = null;
+        }
+        
+        if (liveChatListener) {
+            liveChatListener.off();
+            liveChatListener = null;
+        }
+        
+        // Hide live controls
+        document.getElementById('live-controls-container').style.display = 'none';
+        
+        showCustomAlert("Live stream ended", "fa-check-circle");
+        switchView('feed');
+    }
 }
 
 function joinLiveStream(postId) {
@@ -1008,6 +1092,9 @@ function joinLiveStream(postId) {
         if (postData && postData.isLive && postData.streamStatus === 'active') {
             switchView('live-stream');
             document.getElementById('live-stream-title').innerText = postData.title || 'Live Stream';
+            
+            // Hide live controls for viewers (only host sees them)
+            document.getElementById('live-controls-container').style.display = 'none';
             
             // Join as viewer
             db.ref(`livestreams/${postId}/viewers`).transaction(current => {
@@ -1086,35 +1173,6 @@ function sendLiveChat() {
     input.value = '';
 }
 
-function endLiveStream() {
-    if (liveStreamId) {
-        // Update stream status
-        db.ref(`posts/${liveStreamId}`).update({
-            streamStatus: 'ended',
-            endTime: Date.now()
-        });
-        
-        db.ref(`livestreams/${liveStreamId}`).update({
-            status: 'ended',
-            endTime: Date.now()
-        });
-        
-        // Clean up
-        if (liveStream) {
-            liveStream.getTracks().forEach(track => track.stop());
-            liveStream = null;
-        }
-        
-        if (liveChatListener) {
-            liveChatListener.off();
-            liveChatListener = null;
-        }
-        
-        showCustomAlert("Live stream ended", "fa-check-circle");
-        switchView('feed');
-    }
-}
-
 function loadLiveStreams() {
     const container = document.getElementById('live-streams-container');
     container.innerHTML = '';
@@ -1148,6 +1206,70 @@ function loadLiveStreams() {
             }
         });
     });
+}
+
+/* ============================================== */
+/* FIXED: CALL MIC/CAM TOGGLES - DEVICE COMPATIBLE */
+/* ============================================== */
+
+// FIXED: Camera toggle with proper device detection
+function toggleCam() {
+    if (!localStream) return;
+    
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        const btn = document.getElementById('btn-cam');
+        btn.classList.toggle('active');
+        btn.innerHTML = videoTrack.enabled ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash"></i>';
+        
+        // Update UI immediately for all devices
+        if (videoTrack.enabled) {
+            btn.style.background = 'white';
+            btn.style.color = 'var(--accent-color)';
+        } else {
+            btn.style.background = 'rgba(255,255,255,0.2)';
+            btn.style.color = 'white';
+        }
+        
+        // Force UI update for iOS
+        setTimeout(() => {
+            btn.style.display = 'none';
+            setTimeout(() => {
+                btn.style.display = 'flex';
+            }, 10);
+        }, 10);
+    }
+}
+
+// FIXED: Microphone toggle with proper device detection
+function toggleMic() {
+    if (!localStream) return;
+    
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        const btn = document.getElementById('btn-mic');
+        btn.classList.toggle('active');
+        btn.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+        
+        // Update UI immediately for all devices
+        if (audioTrack.enabled) {
+            btn.style.background = 'white';
+            btn.style.color = 'var(--accent-color)';
+        } else {
+            btn.style.background = 'rgba(255,255,255,0.2)';
+            btn.style.color = 'white';
+        }
+        
+        // Force UI update for iOS
+        setTimeout(() => {
+            btn.style.display = 'none';
+            setTimeout(() => {
+                btn.style.display = 'flex';
+            }, 10);
+        }, 10);
+    }
 }
 
 /* --- MARKETPLACE SYSTEM --- */
@@ -1363,27 +1485,6 @@ function editPage() {
     showCustomAlert("Page editing feature would open here", "fa-info-circle");
 }
 
-/* --- CONTROLS --- */
-function toggleCam() {
-    if(localStream) {
-        const videoTrack = localStream.getVideoTracks()[0];
-        if(videoTrack) {
-            videoTrack.enabled = !videoTrack.enabled;
-            document.getElementById('btn-cam').classList.toggle('active');
-        }
-    }
-}
-
-function toggleMic() {
-    if(localStream) {
-        const audioTrack = localStream.getAudioTracks()[0];
-        if(audioTrack) {
-            audioTrack.enabled = !audioTrack.enabled;
-            document.getElementById('btn-mic').classList.toggle('active');
-        }
-    }
-}
-
 /* --- FRIEND ACTIONS --- */
 async function addFriendAction() {
     if (!viewedProfile || viewedProfile === currentUser) return;
@@ -1428,11 +1529,14 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     
     // Live chat enter key
-    document.getElementById('live-chat-input')?.addEventListener('keypress', function(e) {
-        if(e.key === 'Enter') {
-            sendLiveChat();
-        }
-    });
+    const liveChatInput = document.getElementById('live-chat-input');
+    if (liveChatInput) {
+        liveChatInput.addEventListener('keypress', function(e) {
+            if(e.key === 'Enter') {
+                sendLiveChat();
+            }
+        });
+    }
     
     // Prevent dialog from closing when clicking X on prompt
     document.getElementById('dialog-input').addEventListener('keypress', function(e) {
@@ -1440,4 +1544,7 @@ window.addEventListener('DOMContentLoaded', () => {
             closeCustomDialog(true);
         }
     });
+    
+    // Hide live controls by default
+    document.getElementById('live-controls-container').style.display = 'none';
 });
