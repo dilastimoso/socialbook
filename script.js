@@ -36,7 +36,7 @@ function showCustomAlert(msg, icon='fa-info-circle') {
     document.getElementById('dialog-ok').innerText = "OK";
     dialogCallback = null;
 }
-function showCustomConfirm(msg, callback) {
+function showCustomConfirm(msg, callback, rejectCallback = null) {
     const overlay = document.getElementById('custom-dialog-overlay');
     overlay.style.display = 'flex';
     document.getElementById('dialog-icon').className = 'fas fa-question-circle';
@@ -44,7 +44,10 @@ function showCustomConfirm(msg, callback) {
     document.getElementById('dialog-input').style.display = 'none';
     document.getElementById('dialog-cancel').style.display = 'inline-block';
     document.getElementById('dialog-ok').innerText = "Yes";
-    dialogCallback = (res) => { if(res) callback(); };
+    dialogCallback = (res) => { 
+        if(res) callback(); 
+        else if(rejectCallback) rejectCallback();
+    };
 }
 function showCustomPrompt(msg, callback) {
     const overlay = document.getElementById('custom-dialog-overlay');
@@ -87,17 +90,33 @@ function switchView(viewName, el) {
     document.getElementById('user-dropdown').style.display = 'none';
 }
 
+// Hide main UI immediately on page load
+document.getElementById('main-header').style.display = 'none';
+document.getElementById('main-container').style.display = 'none';
+
 auth.onAuthStateChanged(user => {
     const modal = document.getElementById('auth-modal');
+    const header = document.getElementById('main-header');
+    const container = document.getElementById('main-container');
+    
     if (user) {
         currentUser = user.email.split('@')[0]; 
         modal.style.display = 'none';
+        
+        // Show main UI
+        header.style.display = 'flex';
+        container.style.display = 'flex';
+        
         updateHeaderUser();
         loadFeed();
         listenForCalls();
     } else {
         modal.style.display = 'flex';
         modal.classList.add('animate-enter');
+        
+        // Hide main UI
+        header.style.display = 'none';
+        container.style.display = 'none';
     }
     document.getElementById('login-loading').style.display = 'none';
 });
@@ -119,19 +138,35 @@ async function updateHeaderUser() {
 async function handleLogin() {
     const u = document.getElementById('auth-username').value.trim();
     const p = document.getElementById('auth-password').value;
+    if(!u || !p) return showCustomAlert("Please enter username and password", "fa-times-circle");
+    
     document.getElementById('login-loading').style.display = 'block';
-    try { await auth.signInWithEmailAndPassword(u + "@socialbook.com", p); } 
-    catch (e) { showCustomAlert(e.message, "fa-times-circle"); document.getElementById('login-loading').style.display = 'none'; }
+    try { 
+        await auth.signInWithEmailAndPassword(u + "@socialbook.com", p); 
+    } catch (e) { 
+        showCustomAlert("Login failed. Please check credentials.", "fa-times-circle"); 
+        document.getElementById('login-loading').style.display = 'none'; 
+    }
 }
 async function handleRegister() {
     const u = document.getElementById('auth-username').value.trim();
     const p = document.getElementById('auth-password').value;
-    if(!u||!p) return showCustomAlert("Fill fields");
+    if(!u||!p) return showCustomAlert("Please fill all fields", "fa-times-circle");
+    
+    if(u.length < 3) return showCustomAlert("Username must be at least 3 characters", "fa-times-circle");
+    if(p.length < 6) return showCustomAlert("Password must be at least 6 characters", "fa-times-circle");
+    
     try {
         await auth.createUserWithEmailAndPassword(u + "@socialbook.com", p);
         await db.ref('users/' + u).set({ friends: [] });
-        showCustomAlert("Welcome!", "fa-check-circle");
-    } catch(e) { showCustomAlert(e.message); }
+        showCustomAlert("Account created successfully!", "fa-check-circle");
+    } catch(e) { 
+        if(e.code === 'auth/email-already-in-use') {
+            showCustomAlert("Username already exists", "fa-times-circle");
+        } else {
+            showCustomAlert("Registration failed: " + e.message, "fa-times-circle");
+        }
+    }
 }
 function handleSignOut() {
     showCustomConfirm("Are you sure you want to sign out?", () => {
@@ -303,9 +338,19 @@ function addComment(key, btn) {
 
 /* --- CHAT --- */
 function createGroupChat() {
-    showCustomPrompt("Group Name:", name => {
+    showCustomPrompt("Enter group name:", name => {
+        if(!name || name.trim() === '') {
+            showCustomAlert("Group name cannot be empty", "fa-times-circle");
+            return;
+        }
         const gid = 'group_' + Date.now();
-        db.ref(`users/${currentUser}/groups/${gid}`).set({name: name, type:'group'});
+        db.ref(`users/${currentUser}/groups/${gid}`).set({
+            name: name.trim(), 
+            type: 'group',
+            members: [currentUser],
+            created: Date.now()
+        });
+        showCustomAlert(`Group "${name.trim()}" created!`, "fa-check-circle");
     });
 }
 function renderFriendList() {
@@ -471,325 +516,248 @@ async function updateCoverPhoto(input) {
     }
 }
 
-/* --- COMPLETELY FIXED WEBRTC CALLING SYSTEM --- */
+/* --- COMPLETELY REWORKED WEBRTC CALLING SYSTEM --- */
 let localStream = null;
-let pc = null;
-const rtcConfig = { 
+let peerConnection = null;
+let currentCallId = null;
+let callStatusListener = null;
+let offerListener = null;
+let answerListener = null;
+let iceCandidateListeners = [];
+
+const iceServers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
-    ] 
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
+    ]
 };
-let candidateQueue = [];
-let answerListener = null;
-let offerListener = null;
-let iceAnswerListener = null;
-let iceOfferListener = null;
 
-function initiateCall(type) {
-    if(!currentChatPartner) return showCustomAlert("Select a chat first");
+async function initiateCall(type) {
+    if(!currentChatPartner) return showCustomAlert("Please select a chat first", "fa-times-circle");
     
     // Generate call ID
-    let callId;
-    if (currentChatIsGroup) {
-        callId = currentChatPartner;
-    } else {
-        callId = [currentUser, currentChatPartner].sort().join('_');
-    }
+    currentCallId = currentChatIsGroup ? 
+        `group_${currentChatPartner}_${Date.now()}` : 
+        [currentUser, currentChatPartner].sort().join('_') + '_' + Date.now();
     
-    // Clean up any existing call data
-    db.ref(`calls/${callId}`).remove();
-    
-    activeCall = { 
-        id: callId, 
-        type: type, 
-        role: 'host',
-        chatPartner: currentChatPartner,
-        isGroup: currentChatIsGroup
-    };
-    
-    // Set up the call with a timeout
-    db.ref(`calls/${callId}`).set({ 
-        caller: currentUser, 
-        type: type, 
-        status: 'ringing', 
-        timestamp: Date.now(),
-        participants: currentChatIsGroup ? 'group' : [currentUser, currentChatPartner],
-        isGroup: currentChatIsGroup
-    });
-    
-    openVideoModal('calling', type);
-    
-    // Listen for answer with a timeout
-    const timeout = setTimeout(() => {
-        if (activeCall && activeCall.status !== 'accepted') {
-            showCustomAlert("No answer. Call ended.", "fa-times-circle");
-            endCallAction();
-        }
-    }, 30000); // 30 second timeout
-    
-    db.ref(`calls/${callId}/status`).on('value', s => {
-        if(!s.val()) return;
+    try {
+        // Get user media first
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: type === 'video',
+            audio: true
+        });
         
-        if(s.val() === 'accepted') {
-            clearTimeout(timeout);
-            activeCall.status = 'accepted';
-            startWebRTC(true);
-        } else if(s.val() === 'rejected') {
-            clearTimeout(timeout);
-            showCustomAlert("Call rejected", "fa-times-circle");
-            endCallAction();
-        } else if(s.val() === 'ended') {
-            clearTimeout(timeout);
-            showCustomAlert("Call ended", "fa-times-circle");
-            endCallAction();
-        }
-    });
+        // Set up peer connection
+        await setupPeerConnection('caller', type);
+        
+        // Create and save offer
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        
+        // Save call data to Firebase
+        await db.ref(`calls/${currentCallId}`).set({
+            caller: currentUser,
+            callee: currentChatPartner,
+            type: type,
+            status: 'ringing',
+            offer: JSON.stringify(offer),
+            timestamp: Date.now(),
+            isGroup: currentChatIsGroup
+        });
+        
+        // Listen for answer
+        listenForAnswer();
+        
+        // Open call interface
+        openVideoModal('calling', type);
+        document.getElementById('localVideo').srcObject = localStream;
+        
+        // Set timeout for unanswered call
+        setTimeout(() => {
+            if (activeCall && activeCall.status === 'ringing') {
+                showCustomAlert("No answer. Call ended.", "fa-times-circle");
+                endCallAction();
+            }
+        }, 45000); // 45 seconds
+        
+    } catch (error) {
+        console.error("Call initiation failed:", error);
+        showCustomAlert("Failed to start call: " + error.message, "fa-times-circle");
+        cleanupCall();
+    }
 }
 
 function listenForCalls() {
-    db.ref('calls').on('child_added', async snap => {
-        const val = snap.val();
-        if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
+    db.ref('calls').on('child_added', async (snapshot) => {
+        const callData = snapshot.val();
+        const callId = snapshot.key;
+        
+        // Ignore if not for current user or already answered/ended
+        if (!callData || callData.status !== 'ringing' || callData.caller === currentUser) return;
         
         // Check if this call is for me
-        let shouldAnswer = false;
-        
-        if (val.isGroup) {
-            const groupSnap = await db.ref(`users/${currentUser}/groups/${snap.key}`).once('value');
-            shouldAnswer = groupSnap.exists();
+        let isForMe = false;
+        if (callData.isGroup) {
+            // For group calls, check if I'm in the group
+            const groupSnap = await db.ref(`users/${currentUser}/groups/${callData.callee}`).once('value');
+            isForMe = groupSnap.exists();
         } else {
-            shouldAnswer = val.participants && val.participants.includes(currentUser);
+            // For 1-on-1 calls, check if I'm the callee
+            isForMe = callData.callee === currentUser;
         }
         
-        if (shouldAnswer) {
-            showCustomConfirm(`${val.caller} is calling (${val.type}). Answer?`, () => {
-                activeCall = { 
-                    id: snap.key, 
-                    type: val.type, 
-                    role: 'guest',
-                    status: 'accepted',
-                    isGroup: val.isGroup
-                };
-                
-                // Update call status to accepted
-                db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
-                openVideoModal('answer', val.type);
-                startWebRTC(false);
-            }, () => {
-                // User rejected the call
-                db.ref(`calls/${snap.key}`).update({ status: 'rejected' });
-            });
+        if (isForMe) {
+            showCustomConfirm(
+                `${callData.caller} is ${callData.type === 'video' ? 'video' : 'audio'} calling. Answer?`,
+                () => answerCall(callId, callData),
+                () => rejectCall(callId)
+            );
         }
     });
 }
 
-// LIVE STREAM FUNCTIONS
-function startLiveBroadcast(postId) {
-    activeCall = { id: postId, type: 'live', role: 'host' };
-    openVideoModal('live', 'video');
-    startWebRTC(true, true);
-}
-
-function joinLiveStream(postId) {
-    activeCall = { id: postId, type: 'live', role: 'guest' };
-    openVideoModal('watch', 'video');
-    startWebRTC(false, true);
-}
-
-async function startWebRTC(isOfferer, isLive=false) {
-    if(!activeCall) return;
-    
-    const callId = activeCall.id;
-    const type = activeCall.type;
-    const basePath = isLive ? `livestreams/${callId}` : `calls/${callId}`;
-    
+async function answerCall(callId, callData) {
     try {
-        // Clean up any existing listeners
-        cleanupWebRTCListeners();
+        currentCallId = callId;
         
         // Get user media
-        localStream = await navigator.mediaDevices.getUserMedia({ 
-            video: type === 'video' || type === 'live', 
-            audio: true 
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: callData.type === 'video',
+            audio: true
         });
         
+        // Update call status
+        await db.ref(`calls/${callId}`).update({ status: 'answered' });
+        
+        // Set up peer connection
+        await setupPeerConnection('callee', callData.type);
+        
+        // Set remote description from offer
+        const offer = JSON.parse(callData.offer);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        
+        // Create and send answer
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        await db.ref(`calls/${callId}/answer`).set(JSON.stringify(answer));
+        
+        // Open call interface
+        openVideoModal('answering', callData.type);
         document.getElementById('localVideo').srcObject = localStream;
-        document.getElementById('video-status').innerText = isOfferer ? 'Calling...' : 'Connecting...';
         
-        // Create new peer connection
-        pc = new RTCPeerConnection(rtcConfig);
-        
-        // Add local tracks
-        localStream.getTracks().forEach(track => {
-            pc.addTrack(track, localStream);
-        });
-        
-        // Handle incoming remote stream
-        pc.ontrack = (event) => {
-            console.log("Received remote track");
-            if (event.streams && event.streams[0]) {
-                document.getElementById('remoteVideo').srcObject = event.streams[0];
-                document.getElementById('video-status').innerText = 'Connected';
-            }
-        };
-        
-        // Handle ICE candidates
-        pc.onicecandidate = (event) => {
-            if (event.candidate) {
-                const candidatePath = isOfferer ? `${basePath}/offerCandidates` : `${basePath}/answerCandidates`;
-                db.ref(candidatePath).push(JSON.stringify(event.candidate.toJSON()));
-            }
-        };
-        
-        // Handle connection state changes
-        pc.onconnectionstatechange = () => {
-            console.log("Connection state:", pc.connectionState);
-            if (pc.connectionState === 'connected') {
-                document.getElementById('video-status').innerText = 'Connected';
-            } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                showCustomAlert("Call failed to connect", "fa-times-circle");
-                endCallAction();
-            }
-        };
-        
-        // Handle ICE connection state
-        pc.oniceconnectionstatechange = () => {
-            console.log("ICE connection state:", pc.iceConnectionState);
-            if (pc.iceConnectionState === 'failed') {
-                showCustomAlert("Connection failed", "fa-times-circle");
-                endCallAction();
-            }
-        };
-        
-        if (isOfferer) {
-            // Create offer
-            const offerDescription = await pc.createOffer();
-            await pc.setLocalDescription(offerDescription);
-            
-            // Send offer to Firebase
-            await db.ref(`${basePath}/offer`).set(JSON.stringify(offerDescription));
-            
-            // Listen for answer
-            answerListener = db.ref(`${basePath}/answer`).on('value', async (snapshot) => {
-                if (!snapshot.exists() || !pc.currentRemoteDescription) {
-                    const answerDescription = snapshot.val();
-                    if (answerDescription) {
-                        try {
-                            await pc.setRemoteDescription(JSON.parse(answerDescription));
-                        } catch (error) {
-                            console.error("Error setting remote description:", error);
-                        }
-                    }
-                }
-            });
-            
-            // Listen for answer ICE candidates
-            iceAnswerListener = db.ref(`${basePath}/answerCandidates`).on('child_added', async (snapshot) => {
-                const candidate = JSON.parse(snapshot.val());
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                } catch (error) {
-                    console.error("Error adding ICE candidate:", error);
-                }
-            });
-            
-        } else {
-            // Listen for offer
-            offerListener = db.ref(`${basePath}/offer`).on('value', async (snapshot) => {
-                if (snapshot.exists() && !pc.currentRemoteDescription) {
-                    const offerDescription = snapshot.val();
-                    if (offerDescription) {
-                        try {
-                            await pc.setRemoteDescription(JSON.parse(offerDescription));
-                            
-                            // Create answer
-                            const answerDescription = await pc.createAnswer();
-                            await pc.setLocalDescription(answerDescription);
-                            
-                            // Send answer to Firebase
-                            await db.ref(`${basePath}/answer`).set(JSON.stringify(answerDescription));
-                        } catch (error) {
-                            console.error("Error setting remote description:", error);
-                        }
-                    }
-                }
-            });
-            
-            // Listen for offer ICE candidates
-            iceOfferListener = db.ref(`${basePath}/offerCandidates`).on('child_added', async (snapshot) => {
-                const candidate = JSON.parse(snapshot.val());
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                } catch (error) {
-                    console.error("Error adding ICE candidate:", error);
-                }
-            });
-        }
-        
-        // Listen for remote ICE candidates from the other side
-        const remoteCandidatePath = isOfferer ? `${basePath}/answerCandidates` : `${basePath}/offerCandidates`;
-        const remoteCandidateListener = db.ref(remoteCandidatePath).on('child_added', async (snapshot) => {
-            const candidate = JSON.parse(snapshot.val());
-            try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (error) {
-                console.error("Error adding remote ICE candidate:", error);
-            }
-        });
+        // Listen for ICE candidates from caller
+        listenForRemoteCandidates(callId, 'caller');
         
     } catch (error) {
-        console.error("WebRTC error:", error);
-        showCustomAlert("Failed to start call: " + error.message, "fa-times-circle");
-        endCallAction();
+        console.error("Answer call failed:", error);
+        showCustomAlert("Failed to answer call", "fa-times-circle");
+        cleanupCall();
     }
 }
 
-function cleanupWebRTCListeners() {
-    // Remove all Firebase listeners
-    if (answerListener) {
-        answerListener.off();
-        answerListener = null;
-    }
-    if (offerListener) {
-        offerListener.off();
-        offerListener = null;
-    }
-    if (iceAnswerListener) {
-        iceAnswerListener.off();
-        iceAnswerListener = null;
-    }
-    if (iceOfferListener) {
-        iceOfferListener.off();
-        iceOfferListener = null;
+async function setupPeerConnection(role, type) {
+    // Clean up any existing connection
+    if (peerConnection) {
+        peerConnection.close();
     }
     
-    // Clear candidate queue
-    candidateQueue = [];
+    // Create new peer connection
+    peerConnection = new RTCPeerConnection(iceServers);
+    
+    // Add local stream tracks
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        });
+    }
+    
+    // Handle incoming stream
+    peerConnection.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+            document.getElementById('remoteVideo').srcObject = event.streams[0];
+            document.getElementById('video-status').innerText = 'Connected';
+        }
+    };
+    
+    // Handle ICE candidates
+    peerConnection.onicecandidate = (event) => {
+        if (event.candidate && currentCallId) {
+            const candidatePath = role === 'caller' ? 
+                `calls/${currentCallId}/callerCandidates` : 
+                `calls/${currentCallId}/calleeCandidates`;
+            db.ref(candidatePath).push(JSON.stringify(event.candidate));
+        }
+    };
+    
+    // Handle connection state
+    peerConnection.onconnectionstatechange = () => {
+        console.log("Connection state:", peerConnection.connectionState);
+        if (peerConnection.connectionState === 'connected') {
+            document.getElementById('video-status').innerText = 'Connected';
+        } else if (peerConnection.connectionState === 'failed' || 
+                  peerConnection.connectionState === 'disconnected') {
+            showCustomAlert("Call disconnected", "fa-times-circle");
+            endCallAction();
+        }
+    };
+}
+
+function listenForAnswer() {
+    if (!currentCallId) return;
+    
+    answerListener = db.ref(`calls/${currentCallId}/answer`).on('value', async (snapshot) => {
+        if (snapshot.exists() && peerConnection) {
+            const answer = JSON.parse(snapshot.val());
+            if (!peerConnection.remoteDescription) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                listenForRemoteCandidates(currentCallId, 'callee');
+            }
+        }
+    });
+}
+
+function listenForRemoteCandidates(callId, remoteRole) {
+    const candidatePath = remoteRole === 'caller' ? 
+        `calls/${callId}/callerCandidates` : 
+        `calls/${callId}/calleeCandidates`;
+    
+    const listener = db.ref(candidatePath).on('child_added', async (snapshot) => {
+        if (peerConnection) {
+            const candidate = JSON.parse(snapshot.val());
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error("Error adding ICE candidate:", error);
+            }
+        }
+    });
+    
+    iceCandidateListeners.push({ path: candidatePath, listener: listener });
+}
+
+function rejectCall(callId) {
+    db.ref(`calls/${callId}`).update({ status: 'rejected' });
+    setTimeout(() => {
+        db.ref(`calls/${callId}`).remove();
+    }, 5000);
 }
 
 function openVideoModal(mode, type) {
     document.getElementById('video-modal').style.display = 'flex';
-    document.getElementById('call-type-label').innerText = type === 'live' ? 'Live Stream' : (type === 'video' ? 'Video Call' : 'Audio Call');
+    document.getElementById('call-type-label').innerText = type === 'video' ? 'Video Call' : 'Audio Call';
     
-    // Reset video elements
-    document.getElementById('remoteVideo').srcObject = null;
-    document.getElementById('localVideo').srcObject = null;
+    // Reset status
+    document.getElementById('video-status').innerText = 
+        mode === 'calling' ? 'Calling...' : 
+        mode === 'answering' ? 'Connecting...' : 
+        'Connected';
     
-    // Set status message
-    let statusMsg = '';
-    switch(mode) {
-        case 'calling': statusMsg = 'Calling...'; break;
-        case 'answer': statusMsg = 'Connecting...'; break;
-        case 'live': statusMsg = 'Starting live stream...'; break;
-        case 'watch': statusMsg = 'Joining live stream...'; break;
-        default: statusMsg = 'Connecting...';
-    }
-    document.getElementById('video-status').innerText = statusMsg;
-    
-    // Show/hide local video based on call type
-    if(type === 'audio' || (activeCall && activeCall.type === 'live' && activeCall.role === 'guest')) {
+    // Show/hide local video based on type
+    if (type === 'audio') {
         document.getElementById('localVideo').style.display = 'none';
     } else {
         document.getElementById('localVideo').style.display = 'block';
@@ -797,50 +765,77 @@ function openVideoModal(mode, type) {
 }
 
 function endCallAction() {
-    // Clean up WebRTC
-    cleanupWebRTCListeners();
+    // Clean up Firebase listeners
+    if (callStatusListener) {
+        callStatusListener.off();
+        callStatusListener = null;
+    }
+    if (offerListener) {
+        offerListener.off();
+        offerListener = null;
+    }
+    if (answerListener) {
+        answerListener.off();
+        answerListener = null;
+    }
+    
+    iceCandidateListeners.forEach(item => {
+        db.ref(item.path).off('child_added', item.listener);
+    });
+    iceCandidateListeners = [];
+    
+    // Close peer connection
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
     
     // Stop media tracks
     if (localStream) {
-        localStream.getTracks().forEach(track => {
-            track.stop();
-        });
+        localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
     
-    // Close peer connection
-    if (pc) {
-        pc.close();
-        pc = null;
+    // Remove call data from Firebase
+    if (currentCallId) {
+        db.ref(`calls/${currentCallId}`).remove();
     }
     
-    // Update call status in Firebase if we have an active call
-    if (activeCall) {
-        const basePath = activeCall.type === 'live' ? `livestreams/${activeCall.id}` : `calls/${activeCall.id}`;
-        
-        // Only host should remove the call data
-        if (activeCall.role === 'host') {
-            db.ref(basePath).remove();
-        } else {
-            // Guest just sets status to ended
-            db.ref(`${basePath}/status`).set('ended');
-        }
-        
-        // Update live stream status if needed
-        if (activeCall.type === 'live' && activeCall.role === 'host') {
-            db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'});
-        }
-    }
+    // Reset variables
+    currentCallId = null;
+    activeCall = null;
     
     // Hide video modal
     document.getElementById('video-modal').style.display = 'none';
     
-    // Reset active call
-    activeCall = null;
-    
     // Reset video elements
     document.getElementById('remoteVideo').srcObject = null;
     document.getElementById('localVideo').srcObject = null;
+}
+
+function cleanupCall() {
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+    }
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    if (currentCallId) {
+        db.ref(`calls/${currentCallId}`).remove();
+        currentCallId = null;
+    }
+    activeCall = null;
+}
+
+// LIVE STREAM FUNCTIONS (simplified)
+function startLiveBroadcast(postId) {
+    showCustomAlert("Live streaming is not fully implemented in this version", "fa-info-circle");
+}
+
+function joinLiveStream(postId) {
+    showCustomAlert("Live streaming is not fully implemented in this version", "fa-info-circle");
 }
 
 /* --- CONTROLS --- */
@@ -904,6 +899,13 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('msg-input').addEventListener('keypress', function(e) {
         if(e.key === 'Enter') {
             sendMessage();
+        }
+    });
+    
+    // Prevent dialog from closing when clicking X on prompt
+    document.getElementById('dialog-input').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            closeCustomDialog(true);
         }
     });
 });
