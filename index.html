@@ -356,6 +356,100 @@
         .nav-item.marketplace::before { content: "🛒"; }
         .nav-item.live::before { content: "🔴"; }
 
+        /* FIXED: Call ended overlay */
+        .call-ended-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 4000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            display: none;
+        }
+
+        .call-ended-overlay i {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            color: #ef4444;
+        }
+
+        /* FIXED: Live stream controls */
+        .live-controls {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            background: rgba(0,0,0,0.7);
+            padding: 15px 25px;
+            border-radius: 30px;
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+        }
+
+        .live-control-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+            color: white;
+            background: rgba(255,255,255,0.2);
+        }
+
+        .live-control-btn.active {
+            background: white;
+            color: var(--accent-color);
+        }
+
+        .live-control-btn.end {
+            background: #ef4444;
+            color: white;
+        }
+
+        /* FIXED: Device compatibility for Apple devices */
+        video {
+            -webkit-transform: scaleX(1);
+            transform: scaleX(1);
+            object-fit: cover;
+        }
+
+        /* iOS/Safari specific fixes */
+        @supports (-webkit-touch-callout: none) {
+            video {
+                object-fit: cover;
+            }
+            
+            .call-controls, .live-controls {
+                bottom: 20px;
+            }
+            
+            .control-btn, .live-control-btn {
+                width: 56px;
+                height: 56px;
+                font-size: 1.3rem;
+            }
+        }
+
+        /* Android/Chrome fixes */
+        @supports not (-webkit-touch-callout: none) {
+            video {
+                transform: scaleX(1);
+            }
+        }
+
         @media (max-width: 768px) {
             header { height: 60px; padding: 0 15px; }
             .container { flex-direction: column-reverse; height: calc(100dvh - 60px); }
@@ -367,6 +461,15 @@
             .friend-list { width: 100%; height: 80px; flex-direction: row; overflow-x: auto; padding: 10px; background: transparent; }
             .chat-area { border-radius: 15px 15px 0 0; padding: 10px; }
             .marketplace-item img { height: 150px; }
+            .call-controls, .live-controls {
+                bottom: 20px;
+                padding: 12px 20px;
+            }
+            .control-btn, .live-control-btn {
+                width: 48px;
+                height: 48px;
+                font-size: 1.1rem;
+            }
         }
     </style>
 </head>
@@ -397,6 +500,14 @@
         </div>
     </div>
 
+    <!-- CALL ENDED OVERLAY (FIXED) -->
+    <div id="call-ended-overlay" class="call-ended-overlay">
+        <i class="fas fa-phone-slash"></i>
+        <h2 style="margin-bottom: 10px;">Call Ended</h2>
+        <p id="call-ended-by" style="margin-bottom: 20px; opacity: 0.8;"></p>
+        <button class="btn-modern" onclick="hideCallEndedOverlay()">OK</button>
+    </div>
+
     <div id="video-modal">
         <div style="position: absolute; top: 20px; left: 20px; color: white; font-weight: bold; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 20px;">
             <span id="call-type-label">Video Call</span>
@@ -412,6 +523,19 @@
             <button class="control-btn active" id="btn-mic" onclick="toggleMic()"><i class="fas fa-microphone"></i></button>
             <button class="control-btn end" onclick="endCallAction()"><i class="fas fa-phone-slash"></i></button>
         </div>
+    </div>
+
+    <!-- LIVE STREAM CONTROLS (FIXED) -->
+    <div id="live-controls-container" class="live-controls">
+        <button class="live-control-btn active" id="live-btn-cam" onclick="toggleLiveCam()">
+            <i class="fas fa-video"></i>
+        </button>
+        <button class="live-control-btn active" id="live-btn-mic" onclick="toggleLiveMic()">
+            <i class="fas fa-microphone"></i>
+        </button>
+        <button class="live-control-btn end" onclick="endLiveStream()">
+            <i class="fas fa-stop"></i>
+        </button>
     </div>
 
     <header id="main-header">
