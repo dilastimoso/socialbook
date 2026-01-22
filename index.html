@@ -49,6 +49,7 @@
             height: 70px; display: flex; align-items: center; justify-content: space-between;
             padding: 0 40px; background: rgba(255,255,255,0.85); backdrop-filter: blur(20px);
             border-bottom: 1px solid rgba(0,0,0,0.05); z-index: 100; flex-shrink: 0;
+            display: none; /* Hidden by default */
         }
 
         .logo {
@@ -82,7 +83,7 @@
         }
         .user-dropdown-item:hover { background: #f1f5f9; color: var(--accent-color); }
 
-        .container { display: flex; flex: 1; height: calc(100dvh - 70px); overflow: hidden; position: relative; }
+        .container { display: flex; flex: 1; height: calc(100dvh - 70px); overflow: hidden; position: relative; display: none; /* Hidden by default */ }
 
         aside { width: 280px; padding: 30px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
         .nav-item {
@@ -286,7 +287,7 @@
         </div>
     </div>
 
-    <header>
+    <header id="main-header">
         <div class="logo" onclick="switchView('feed')"><i class="fas fa-shapes"></i> Socialbook</div>
         <div class="user-menu" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'">
             <div class="user-pill">
@@ -301,7 +302,7 @@
         </div>
     </header>
 
-    <div class="container">
+    <div class="container" id="main-container">
         <aside>
             <div class="nav-item active" onclick="switchView('feed', this)"><i class="fas fa-stream"></i> <span>Feed</span></div>
             <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> <span>Chat</span></div>
