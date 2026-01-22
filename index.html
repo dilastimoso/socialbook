@@ -182,6 +182,54 @@
         #upload-bar { width: 0%; height: 100%; background: var(--accent-gradient); transition: 0.3s; }
         .emoji-list { display: none; position: absolute; bottom: 60px; right: 20px; background: white; padding: 10px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; width: 200px; }
 
+        /* ADDED CSS FOR FRIEND ITEMS AND ACTION BUTTONS */
+        .friend-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 15px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-bottom: 5px;
+            color: var(--text-dark);
+        }
+
+        .friend-item:hover {
+            background: rgba(99, 102, 241, 0.1);
+            transform: translateX(5px);
+        }
+
+        .friend-item.active {
+            background: rgba(99, 102, 241, 0.15);
+            color: var(--accent-color);
+            font-weight: 600;
+        }
+
+        .action-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: 0.2s;
+            color: var(--text-gray);
+        }
+
+        .action-btn:hover {
+            background: rgba(0,0,0,0.05);
+            color: var(--accent-color);
+        }
+
+        .like-btn.liked {
+            color: #ef4444 !important;
+        }
+
+        .like-btn.liked i {
+            color: #ef4444 !important;
+        }
+
         @media (max-width: 768px) {
             header { height: 60px; padding: 0 15px; }
             .container { flex-direction: column-reverse; height: calc(100dvh - 60px); }
@@ -311,7 +359,7 @@
                                 <span style="cursor:pointer; font-size:1.5rem;" onclick="addEmoji('👍')">👍</span>
                             </div>
                             <button class="btn-icon" onclick="document.getElementById('emoji-picker').style.display = document.getElementById('emoji-picker').style.display=='none'?'grid':'none'">😊</button>
-                            <label class="btn-icon"><i class="fas fa-image"></i><input type="file" id="msg-image" accept="image/*" style="display: none;"></label>
+                            <label class="btn-icon"><i class="fas fa-image"></i><input type="file" id="msg-image" accept="image/*" style="display: none;" onchange="handleMessageImage(this)"></label>
                             <input type="text" id="msg-input" class="input-modern" style="margin: 0; border-radius: 30px;" placeholder="Type a message...">
                             <button class="btn-modern" style="border-radius: 50%; width: 48px; height: 48px; padding: 0;" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
                         </div>
