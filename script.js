@@ -220,6 +220,12 @@ function renderPost(p, container) {
     div.className = 'glass-panel';
     const isMine = p.author === currentUser;
     const isLive = p.isLive && p.streamStatus === 'active';
+    
+    // Check if current user has liked this post (FIXED HEART HIGHLIGHT)
+    const hasLiked = p.likes && p.likes.includes(currentUser);
+    const heartIcon = hasLiked ? 'fas fa-heart' : 'far fa-heart';
+    const heartClass = hasLiked ? 'like-btn liked' : 'like-btn';
+    
     let mediaHtml = '';
     if(p.media && p.media.length > 0) {
         const gridClass = p.media.length > 1 ? 'multi' : 'single';
@@ -253,7 +259,9 @@ function renderPost(p, container) {
         <div style="line-height:1.5;">${p.content}</div>
         ${mediaHtml}
         <div class="post-actions">
-            <div class="action-btn" onclick="toggleLike('${p.key}')"><i class="far fa-heart"></i> ${p.likes ? p.likes.length : 0}</div>
+            <div class="action-btn ${heartClass}" onclick="toggleLike('${p.key}')" style="${hasLiked ? 'color: #ef4444;' : ''}">
+                <i class="${heartIcon}" style="${hasLiked ? 'color: #ef4444;' : ''}"></i> ${p.likes ? p.likes.length : 0}
+            </div>
             <div class="action-btn" onclick="toggleCommentSection('${p.key}')"><i class="far fa-comment"></i> ${p.comments ? p.comments.length : 0}</div>
             ${liveAction}
         </div>
@@ -356,10 +364,25 @@ function selectChat(id, name, isGroup) {
         if(el) el.remove();
     });
 }
+async function handleMessageImage(input) {
+    if(input.files[0]) {
+        const file = input.files[0];
+        const b64 = await toBase64(file);
+        const data = { 
+            author: currentUser, 
+            text: "", 
+            image: b64, 
+            date: Date.now() 
+        };
+        db.ref('chats/' + window.currentRoomId).push(encryptData(data));
+        input.value = '';
+    }
+}
 function sendMessage() {
     const inp = document.getElementById('msg-input');
-    if(!inp.value) return;
-    const data = { author: currentUser, text: inp.value, date: Date.now() };
+    const text = inp.value.trim();
+    if(!text) return;
+    const data = { author: currentUser, text: text, date: Date.now() };
     db.ref('chats/' + window.currentRoomId).push(encryptData(data));
     inp.value = '';
 }
@@ -367,6 +390,11 @@ function deleteMessage(key) {
     showCustomConfirm("Unsend message?", () => {
         db.ref('chats/' + window.currentRoomId + '/' + key).remove();
     });
+}
+function addEmoji(emoji) {
+    const inp = document.getElementById('msg-input');
+    inp.value += emoji;
+    document.getElementById('emoji-picker').style.display = 'none';
 }
 
 /* --- TIMELINE --- */
@@ -404,6 +432,26 @@ async function openTimeline(username) {
         coverBtn.style.display = 'none';
     }
     
+    // Check friendship status for buttons
+    const currentUserSnap = await db.ref('users/' + currentUser).once('value');
+    const currentUserData = currentUserSnap.val() || {};
+    const isFriend = (currentUserData.friends || []).includes(username);
+    const isMe = username === currentUser;
+    
+    const addFriendBtn = document.getElementById('btn-add-friend');
+    const msgFriendBtn = document.getElementById('btn-msg-friend');
+    
+    if (isMe) {
+        addFriendBtn.style.display = 'none';
+        msgFriendBtn.style.display = 'none';
+    } else if (isFriend) {
+        addFriendBtn.style.display = 'none';
+        msgFriendBtn.style.display = 'block';
+    } else {
+        addFriendBtn.style.display = 'block';
+        msgFriendBtn.style.display = 'none';
+    }
+    
     document.getElementById('user-dropdown').style.display = 'none';
     loadFeed(username);
 }
@@ -423,16 +471,39 @@ async function updateCoverPhoto(input) {
     }
 }
 
-/* --- FIXED WEB-RTC CALLS (CANDIDATE QUEUING) --- */
+/* --- FIXED WEB-RTC CALLS (WORKING IN PRIVATE MESSAGES) --- */
 let localStream, pc;
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const candidateQueue = []; // Queue for early candidates
+const candidateQueue = [];
 
 function initiateCall(type) {
     if(!currentChatPartner) return showCustomAlert("Select a chat first");
-    const callId = window.currentRoomId;
-    db.ref(`calls/${callId}`).set({ caller: currentUser, type: type, status: 'ringing', timestamp: Date.now() });
-    activeCall = { id: callId, type: type, role: 'host' };
+    
+    // Generate call ID based on chat type
+    let callId;
+    if (currentChatIsGroup) {
+        callId = currentChatPartner;
+    } else {
+        callId = [currentUser, currentChatPartner].sort().join('_');
+    }
+    
+    db.ref(`calls/${callId}`).set({ 
+        caller: currentUser, 
+        type: type, 
+        status: 'ringing', 
+        timestamp: Date.now(),
+        participants: currentChatIsGroup ? 'group' : [currentUser, currentChatPartner],
+        isGroup: currentChatIsGroup
+    });
+    
+    activeCall = { 
+        id: callId, 
+        type: type, 
+        role: 'host',
+        chatPartner: currentChatPartner,
+        isGroup: currentChatIsGroup
+    };
+    
     openVideoModal('calling', type);
     
     db.ref(`calls/${callId}/status`).on('value', s => {
@@ -445,9 +516,30 @@ function listenForCalls() {
     db.ref('calls').on('child_added', snap => {
         const val = snap.val();
         if(!val || val.status !== 'ringing' || val.caller === currentUser) return;
-        if(snap.key.includes(currentUser)) {
+        
+        // Check if this call is for me
+        let shouldAnswer = false;
+        
+        if (val.isGroup) {
+            // For group calls, check if I'm a member of this group
+            db.ref(`users/${currentUser}/groups/${snap.key}`).once('value', groupSnap => {
+                if (groupSnap.exists()) {
+                    shouldAnswer = true;
+                }
+            });
+        } else {
+            // For 1-on-1 calls, check if my username is in participants
+            shouldAnswer = val.participants && val.participants.includes(currentUser);
+        }
+        
+        if (shouldAnswer) {
             showCustomConfirm(`${val.caller} is calling (${val.type}). Answer?`, () => {
-                activeCall = { id: snap.key, type: val.type, role: 'guest' };
+                activeCall = { 
+                    id: snap.key, 
+                    type: val.type, 
+                    role: 'guest',
+                    isGroup: val.isGroup
+                };
                 db.ref(`calls/${snap.key}`).update({ status: 'accepted' });
                 openVideoModal('answer', val.type);
                 startWebRTC(false);
@@ -475,9 +567,17 @@ async function startWebRTC(isOfferer, isLive=false) {
     // Get media FIRST before creating PC
     if (activeCall.role === 'host' || !isLive) {
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video' || type==='live', audio: true });
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+                video: type==='video' || type==='live', 
+                audio: true 
+            });
             document.getElementById('localVideo').srcObject = localStream;
-        } catch(e) { console.log("Media Error:", e); }
+        } catch(e) { 
+            console.log("Media Error:", e);
+            showCustomAlert("Could not access camera/microphone", "fa-times-circle");
+            endCallAction();
+            return;
+        }
     }
 
     pc = new RTCPeerConnection(rtcConfig);
@@ -503,14 +603,14 @@ async function startWebRTC(isOfferer, isLive=false) {
         db.ref(`${basePath}/answer`).on('value', async s => {
             if(s.val() && !pc.currentRemoteDescription) {
                 await pc.setRemoteDescription(JSON.parse(s.val()));
-                processCandidateQueue(); // FLUSH QUEUE
+                processCandidateQueue();
             }
         });
     } else {
         const offerSnap = await db.ref(`${basePath}/offer`).once('value');
         if(offerSnap.exists()){
             await pc.setRemoteDescription(JSON.parse(offerSnap.val()));
-            processCandidateQueue(); // FLUSH QUEUE
+            processCandidateQueue();
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             db.ref(`${basePath}/answer`).set(JSON.stringify(answer));
@@ -536,9 +636,10 @@ function processCandidateQueue() {
 function openVideoModal(mode, type) {
     document.getElementById('video-modal').style.display = 'flex';
     document.getElementById('call-type-label').innerText = type === 'live' ? 'Live Stream' : (type === 'video' ? 'Video Call' : 'Audio Call');
+    document.getElementById('video-status').innerText = mode === 'calling' ? 'Calling...' : 'Connected';
     
     // Hide local video if audio only or if guest watching live
-    if(type === 'audio' || (activeCall.type === 'live' && activeCall.role === 'guest')) {
+    if(type === 'audio' || (activeCall && activeCall.type === 'live' && activeCall.role === 'guest')) {
         document.getElementById('localVideo').style.display = 'none';
     } else {
         document.getElementById('localVideo').style.display = 'block';
@@ -550,30 +651,91 @@ function endCallAction() {
         const basePath = activeCall.type === 'live' ? `livestreams/${activeCall.id}` : `calls/${activeCall.id}`;
         if(activeCall.role === 'host') db.ref(basePath).remove();
         if(activeCall.type === 'live' && activeCall.role === 'host') {
-             // Update post status to ended
-             db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'}); // Simple update, ideally encrypt
+            db.ref(`posts/${activeCall.id}`).update({streamStatus: 'ended'});
         }
     }
     document.getElementById('video-modal').style.display = 'none';
-    if(localStream) localStream.getTracks().forEach(t => t.stop());
-    if(pc) pc.close();
+    
+    // Stop media tracks properly
+    if(localStream) {
+        localStream.getTracks().forEach(track => {
+            track.stop();
+        });
+        localStream = null;
+    }
+    
+    // Close peer connection
+    if(pc) {
+        pc.close();
+        pc = null;
+    }
+    
+    // Clear candidate queue
+    candidateQueue.length = 0;
+    
     activeCall = null;
-    localStream = null;
-    window.location.reload(); 
 }
 
 /* --- CONTROLS --- */
 function toggleCam() {
     if(localStream) {
         const t = localStream.getVideoTracks()[0];
-        if(t) t.enabled = !t.enabled;
-        document.getElementById('btn-cam').classList.toggle('active');
+        if(t) {
+            t.enabled = !t.enabled;
+            document.getElementById('btn-cam').classList.toggle('active');
+        }
     }
 }
 function toggleMic() {
     if(localStream) {
         const t = localStream.getAudioTracks()[0];
-        if(t) t.enabled = !t.enabled;
-        document.getElementById('btn-mic').classList.toggle('active');
+        if(t) {
+            t.enabled = !t.enabled;
+            document.getElementById('btn-mic').classList.toggle('active');
+        }
     }
 }
+
+/* --- FRIEND ACTIONS --- */
+async function addFriendAction() {
+    if (!viewedProfile || viewedProfile === currentUser) return;
+    
+    // Add to current user's friend list
+    const currentUserRef = db.ref(`users/${currentUser}/friends`);
+    const currentSnap = await currentUserRef.once('value');
+    const currentFriends = currentSnap.val() || [];
+    
+    if (!currentFriends.includes(viewedProfile)) {
+        currentFriends.push(viewedProfile);
+        await currentUserRef.set(currentFriends);
+        showCustomAlert(`Added ${viewedProfile} as friend!`, 'fa-check-circle');
+        openTimeline(viewedProfile);
+    }
+}
+
+function messageFriendAction() {
+    if (!viewedProfile || viewedProfile === currentUser) return;
+    switchView('messages');
+    selectChat(viewedProfile, viewedProfile, false);
+}
+
+/* --- NOTIFICATIONS --- */
+function loadNotifications() {
+    const container = document.getElementById('notif-list');
+    container.innerHTML = '<div class="notif-item"><i class="fas fa-info-circle"></i> No notifications yet</div>';
+}
+
+/* --- INITIALIZATION --- */
+window.addEventListener('DOMContentLoaded', () => {
+    // Set up message image upload
+    document.getElementById('msg-image').addEventListener('change', function(e) {
+        handleMessageImage(this);
+    });
+    
+    // Allow pressing Enter to send messages
+    document.getElementById('msg-input').addEventListener('keypress', function(e) {
+        if(e.key === 'Enter') {
+            sendMessage();
+        }
+    });
+});
